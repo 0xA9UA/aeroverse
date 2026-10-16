@@ -1,3 +1,8 @@
+// MMA FILE SUMMARY
+// Purpose: Defines canonical one-shot CLI names and their MCP coverage relationships.
+// Public interface: Command inventory, aliases and intentional MCP-only tool list.
+// Collaborators: CLI registrars and generated catalog/coverage checks.
+// Invariants: Primary command names are unique; every public tool has explicit CLI coverage.
 /** Canonical names used by every one-shot CLI command registration. */
 export const CLI_COMMANDS = Object.freeze({
   inspectPacketFields: "inspect-packet-fields",
@@ -9,6 +14,9 @@ export const CLI_COMMANDS = Object.freeze({
   inspectSqliteDatabase: "inspect-sqlite-database",
   inspectEvmInterface: "inspect-evm-interface",
   inspectWebNetworkCapture: "inspect-web-network-capture",
+  inspectConsoleNetworkCapture: "inspect-console-network-capture",
+  observeConsoleDebugger: "observe-console-debugger",
+  correlateConsoleObservations: "correlate-console-observations",
   observeWebExecution: "observe-web-execution",
   inspectWebEventListeners: "inspect-web-event-listeners",
   traceWebSourceLocation: "trace-web-source-location",

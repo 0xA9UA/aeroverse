@@ -2,7 +2,7 @@
 name: reverse-engineer-anything
 description: Reverse engineer native, managed, Electron/JavaScript, packaged, firmware, and browser targets with REA. Use shipped-artifact or requested runtime evidence to explain features, compare versions, decompile code, or guide a reconstruction. Skip REA for ordinary source-repository architecture analysis.
 metadata:
-  version: "42"
+  version: "43"
 ---
 
 # REA
@@ -149,6 +149,16 @@ explicit path or endpoint and do not need it.
   `line_offset` / `line_limit`, or explicit null for all remaining output.
   Window counts are display lines, not annotations or samples. Preserve source digests across pages.
   This reads existing files; it does not acquire hardware signals.
+- Console/game packet capture: `inspect_console_network_capture` with a local
+  PCAP/PCAPNG path. Retain packet coordinates, source hashes and decoding limits;
+  no traffic is replayed. For scoped live CPU observation, use
+  `observe_console_debugger` with an explicit GDB-compatible endpoint, actual
+  game/profile/processor identity and caller-selected hooks. Breakpoints alter
+  execution and require an exclusive owner; preserve partial results and cleanup.
+  Use `correlate_console_observations` to join action/IPC events and captured
+  reports with measured clock offsets and uncertainty. Timing and equal payloads
+  remain candidates; a backend requirements report is not a verified replacement
+  server. Read [console observation](references/console-observation.md).
 - Explicit local WebAssembly artifact: `inspect_wasm_artifact`. Supply WABT 1.0.42
   through `REA_WABT_BIN_DIRECTORY`; retain exact byte/tool identity and decoded WAT.
   Select JavaScript glue and candidate paths explicitly and preserve URL/path

@@ -1,3 +1,7 @@
+// MMA FILE SUMMARY
+// Purpose: Verifies transactional skill installation, complete reference coverage and freshness on disk.
+// Collaborators: Canonical generated skill bundle, setup/doctor boundaries and isolated temporary roots.
+// Invariants: Every canonical reference is installed; recovery preserves prior bytes and unrelated files.
 import { createHash } from "node:crypto";
 import {
   access,
@@ -36,6 +40,11 @@ import { PRODUCT_IDENTITY } from "../../../src/identity.js";
 import writeFileAtomic from "write-file-atomic";
 import { z } from "zod";
 import { skillReferenceIssues } from "../../../scripts/lib/docs-facts.mjs";
+
+const canonicalReferences = new URL(
+  "../../../skills/reverse-engineer-anything/references/",
+  import.meta.url,
+);
 
 const expectPermissionMode = async (
   path: string,
@@ -546,14 +555,7 @@ describe("canonical skill transaction", () => {
     expect(await readFile(`${nativeGuide}.rea.backup`, "utf8")).toBe(
       "stale filesystem-write permission grant\n",
     );
-    for (const reference of [
-      "connection-and-recovery.md",
-      "native-and-artifacts.md",
-      "javascript-applications.md",
-      "android-applications.md",
-      "runtime-observation.md",
-      "evidence-workflows.md",
-    ]) {
+    for (const reference of await readdir(canonicalReferences)) {
       const installed = await readFile(
         join(dirname(destination), "references", reference),
         "utf8",
@@ -595,6 +597,30 @@ describe("canonical skill transaction", () => {
     expect(await skillReferenceIssues(dirname(destination))).toEqual([]);
   });
 
+  it("repairs a missing console guide when installed metadata is current", async () => {
+    const home = await createTestTempDirectory("rea-skill-console-guide-");
+    expect(await installCanonicalSkill(home)).toMatchObject({
+      ok: true,
+      value: "installed",
+    });
+    const reference = join(
+      home,
+      ".agents/skills/reverse-engineer-anything/references/console-observation.md",
+    );
+    const canonical = await readFile(
+      new URL("console-observation.md", canonicalReferences),
+    );
+    expect(await readFile(reference)).toEqual(canonical);
+    await rm(reference);
+    expect(await canonicalSkillNeedsInstall(home)).toBe(true);
+    expect(await installCanonicalSkill(home)).toMatchObject({
+      ok: true,
+      value: "installed",
+    });
+    expect(await readFile(reference)).toEqual(canonical);
+    expect(await canonicalSkillNeedsInstall(home)).toBe(false);
+  });
+
   it("binds portable conformance to the generated skill bytes that setup installs", async () => {
     const home = await createTestTempDirectory("rea-skill-commitment-");
     expect(await installCanonicalSkill(home)).toMatchObject({
@@ -603,12 +629,9 @@ describe("canonical skill transaction", () => {
     });
     const paths = [
       "SKILL.md",
-      "references/android-applications.md",
-      "references/connection-and-recovery.md",
-      "references/evidence-workflows.md",
-      "references/javascript-applications.md",
-      "references/native-and-artifacts.md",
-      "references/runtime-observation.md",
+      ...(await readdir(canonicalReferences))
+        .sort()
+        .map((reference) => `references/${reference}`),
     ];
     const records = await Promise.all(
       paths.map(async (path) => {

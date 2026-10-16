@@ -1,3 +1,7 @@
+// MMA FILE SUMMARY
+// Purpose: Declares every public tool's effects and derives consistent MCP annotations.
+// Public interface: TOOL_EFFECTS, toolContractMetadata() and annotationsFromEffects().
+// Invariants: Effects cover all supported inputs, including temporary work and additive Evidence recording.
 /** Possible effects across a tool's supported inputs, including temporary work. */
 export interface ToolEffects {
   readonly mutatesTarget: boolean;
@@ -53,6 +57,15 @@ const sessionEvidence = effects({ mutatesSession: true });
 
 /** Explicit effect audit for every public tool. */
 export const TOOL_EFFECTS: Readonly<Record<string, ToolEffects>> = {
+  inspect_console_network_capture: evidence,
+  observe_console_debugger: effects({
+    mutatesTarget: true,
+    mutatesSession: true,
+    accessesNetwork: true,
+    executesForeignCode: true,
+    idempotent: false,
+  }),
+  correlate_console_observations: evidence,
   list_cutter_sessions: effects({ accessesNetwork: true }),
   cutter_command: effects({
     mutatesTarget: true,

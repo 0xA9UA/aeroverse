@@ -1,3 +1,6 @@
+// MMA FILE SUMMARY
+// Purpose: Audits complete tool effects and the MCP annotations derived from them.
+// Invariants: Foreign execution and device mutation are explicitly inventoried as destructive capabilities.
 import { describe, expect, it } from "vitest";
 
 import { TOOL_CONTRACTS } from "./toolContracts.js";
@@ -145,6 +148,7 @@ describe("tool effects", () => {
       "install_adb_package",
       "instrument_with_frida",
       "load_frida_script",
+      "observe_console_debugger",
       "observe_native_calls",
       "push_adb_file",
       "resume_frida_session",

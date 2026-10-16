@@ -1,3 +1,8 @@
+// MMA FILE SUMMARY
+// Purpose: Assembles the one-shot CLI from shared application workflows.
+// Public interface: createCli().
+// Collaborators: Command registrars, immutable environment snapshot and output projection.
+// Invariants: Import and construction do not acquire target providers; commands own execution.
 import { registerCaptureCommands } from "./cli/captureCommands.js";
 import { registerSignalCommands } from "./cli/signalCommands.js";
 import { registerWasmCommands } from "./cli/wasmCommands.js";
@@ -37,6 +42,7 @@ import { registerWebModuleCommands } from "./cli/webModuleCommands.js";
 import { registerWebSourceLocationCommands } from "./cli/webSourceLocationCommands.js";
 import { registerWebRuntimeCommands } from "./cli/webRuntimeCommands.js";
 import { registerWebNetworkCaptureCommands } from "./cli/webNetworkCaptureCommands.js";
+import { registerConsoleObservationCommands } from "./cli/consoleObservationCommands.js";
 import { registerJavaScriptRecoveryCommands } from "./cli/javascriptRecoveryCommands.js";
 import { registerAdvancedBrowserCommands } from "./cli/browserAdvancedCommands.js";
 import { registerBrowserScenarioCommands } from "./cliBrowserScenarioCommands.js";
@@ -128,6 +134,7 @@ export const createCli = (
   registerWebSourceLocationCommands(cli, logger, environment);
   registerWebRuntimeCommands(cli, logger);
   registerWebNetworkCaptureCommands(cli, logger, environment);
+  registerConsoleObservationCommands(cli, logger);
   registerJavaScriptRecoveryCommands(cli, logger, environment);
   registerAdvancedBrowserCommands(cli, logger);
   registerBrowserScenarioCommands(cli, logger, environment);

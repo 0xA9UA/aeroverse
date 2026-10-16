@@ -1,3 +1,8 @@
+// MMA FILE SUMMARY
+// Purpose: Projects canonical tool families and provider identities into product catalog facts.
+// Public interface: toolFamilyCatalog() and providerCatalog().
+// Collaborators: Built contract sources supplied by catalog-core.
+// Invariants: Family counts cover every canonical tool exactly once; provider capabilities name real contracts.
 import { names } from "./catalog-core.mjs";
 
 /** Build tool-family counts and sorted tool-name lists. */
@@ -121,6 +126,12 @@ export const toolFamilyCatalog = (sources) => {
         ...sources.javascriptRecoveryContracts
           .JAVASCRIPT_RECOVERY_TOOL_CONTRACTS,
       ],
+    },
+    {
+      id: "console-observation",
+      surface: "console-observation",
+      contracts:
+        sources.consoleObservationContracts.CONSOLE_OBSERVATION_TOOL_CONTRACTS,
     },
     {
       id: "session",
@@ -406,6 +417,17 @@ export const providerCatalog = (sources) => {
       contracts:
         sources.javascriptRecoveryContracts.JAVASCRIPT_RECOVERY_TOOL_CONTRACTS,
     },
+    ...[
+      ["CONSOLE_CAPTURE_PROVIDER_IDENTITY", "inspect_console_network_capture"],
+      ["CONSOLE_DEBUGGER_PROVIDER_IDENTITY", "observe_console_debugger"],
+      [
+        "CONSOLE_CORRELATION_PROVIDER_IDENTITY",
+        "correlate_console_observations",
+      ],
+    ].map(([identity, operation]) => ({
+      identity: sources.consoleObservationProviders[identity],
+      contracts: declaredContracts(identity, [operation]),
+    })),
   ]
     .map(({ identity, contracts }) => ({
       id: identity.id,

@@ -1,3 +1,8 @@
+// MMA FILE SUMMARY
+// Purpose: Composes one MCP server from shared services and caller-owned session capabilities.
+// Public interface: createServer() and CreateServerOptions.
+// Collaborators: Contract registrars, service factories, Evidence retention and provider cleanup owners.
+// Invariants: Construction acquires no subprocesses or targets; target-free tools retain independent authority.
 import type { PacketCaptureService } from "../application/captures/PacketCaptureService.js";
 import { createPacketCaptureService } from "../composition/captures.js";
 import { registerCaptureTools } from "./registerCaptureTools.js";
@@ -78,6 +83,9 @@ import { registerWebRuntimeTools } from "./registerWebRuntimeTools.js";
 import type { WebNetworkCaptureService } from "../application/WebNetworkCaptureService.js";
 import { createWebNetworkCaptureService } from "../composition/webNetworkCaptures.js";
 import { registerWebNetworkCaptureTool } from "./registerWebNetworkCaptureTool.js";
+import type { ConsoleObservationService } from "../application/ConsoleObservationService.js";
+import { createConsoleObservationService } from "../composition/consoleObservation.js";
+import { registerConsoleObservationTools } from "./registerConsoleObservationTools.js";
 import { registerJavaScriptRecoveryTool } from "./registerJavaScriptRecoveryTool.js";
 import { JavaScriptRecoveryService } from "../application/javascript/JavaScriptRecoveryService.js";
 import type { JavaScriptRecoveryPort } from "../application/javascript/JavaScriptRecoveryPort.js";
@@ -167,6 +175,7 @@ export interface CreateServerOptions {
   readonly webSourceLocation?: WebSourceLocationService;
   readonly webRuntime?: WebRuntimeService;
   readonly webNetworkCapture?: WebNetworkCaptureService;
+  readonly consoleObservation?: ConsoleObservationService;
   readonly androidAnalysis?: AndroidAnalysisPort;
   readonly apktoolAnalysis?: ApktoolResourceAnalysisPort;
   readonly pcapAnalysis?: PcapAnalysisPort;
@@ -764,6 +773,12 @@ const registerConfiguredAnalysisTools = (
     toolLogger,
     recordEvidence,
     withAdmittedAnalysis,
+  );
+  registerConsoleObservationTools(
+    server,
+    options.consoleObservation ?? createConsoleObservationService(evidenceById),
+    toolLogger,
+    { recordEvidence, withAdmittedAnalysis },
   );
 };
 

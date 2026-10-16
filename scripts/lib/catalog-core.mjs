@@ -1,3 +1,7 @@
+// MMA FILE SUMMARY
+// Purpose: Loads canonical built modules and common deterministic catalog primitives.
+// Public interface: loadSources(), names(), digest() and assertSameNames().
+// Invariants: Generated catalog facts derive from built source contracts rather than duplicated inventories.
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -94,6 +98,9 @@ const SOURCE_PATHS = {
   webNetworkCaptureContracts:
     "dist/contracts/webNetworkCaptureToolContracts.js",
   webNetworkCaptureProvider: "dist/browser/history/CaptureRelease.js",
+  consoleObservationContracts:
+    "dist/contracts/consoleObservationToolContracts.js",
+  consoleObservationProviders: "dist/console/providerIdentities.js",
   browserScenarioContracts: "dist/contracts/browserScenarioToolContracts.js",
   electronContracts: "dist/contracts/javascript/electronToolContracts.js",
   electronFuseProvider: "dist/electron/ElectronFuseProvider.js",

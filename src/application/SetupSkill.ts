@@ -1,3 +1,8 @@
+// MMA FILE SUMMARY
+// Purpose: Installs and inspects the complete managed skill bundle transactionally.
+// Public interface: Skill destinations, canonical installation/freshness and installed identity inspection.
+// Collaborators: Canonical generated skill files, regular-file readers, recovery backups and uninstall ownership.
+// Invariants: Every managed reference participates in installation, freshness and safe removal; prior bytes survive failure.
 import { copyFile, lstat, mkdir, readFile, rm } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { dirname, join } from "node:path";
@@ -27,6 +32,7 @@ export const MANAGED_SKILL_FILES = [
   "references/android-applications.md",
   "references/runtime-observation.md",
   "references/evidence-workflows.md",
+  "references/console-observation.md",
 ] as const;
 
 export const isManagedSkillManifest = (content: string): boolean =>

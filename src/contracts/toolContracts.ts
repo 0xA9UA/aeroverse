@@ -1,3 +1,8 @@
+// MMA FILE SUMMARY
+// Purpose: Owns the complete canonical public tool inventory and exact named lookup.
+// Public interface: TOOL_CONTRACTS and toolContract().
+// Collaborators: Cohesive tool-family contracts consumed by CLI, MCP and documentation.
+// Invariants: Registration binds by name; catalog ordering never selects an operation.
 import { CAPTURE_TOOL_CONTRACTS } from "./captures/captureToolContracts.js";
 import { SIGNAL_TOOL_CONTRACTS } from "./signals/signalToolContracts.js";
 import { WASM_TOOL_CONTRACTS } from "./wasm/wasmToolContracts.js";
@@ -25,6 +30,7 @@ import { APPLICATION_TOOL_CONTRACTS } from "./applicationToolContracts.js";
 import { WEB_SCRIPT_TOOL_CONTRACTS } from "./webScriptToolContracts.js";
 import { WEB_RUNTIME_TOOL_CONTRACTS } from "./webRuntimeToolContracts.js";
 import { WEB_NETWORK_CAPTURE_TOOL_CONTRACTS } from "./webNetworkCaptureToolContracts.js";
+import { CONSOLE_OBSERVATION_TOOL_CONTRACTS } from "./consoleObservationToolContracts.js";
 import { JAVASCRIPT_RECOVERY_TOOL_CONTRACTS } from "./javascript/javascriptRecoveryToolContracts.js";
 import { OFFICIAL_TOOL_CONTRACTS } from "./officialToolContracts.js";
 import { ENHANCED_TOOL_CONTRACTS } from "./enhancedToolContracts.js";
@@ -66,6 +72,7 @@ export const TOOL_CONTRACTS = [
   ...WEB_SCRIPT_TOOL_CONTRACTS,
   ...WEB_RUNTIME_TOOL_CONTRACTS,
   ...WEB_NETWORK_CAPTURE_TOOL_CONTRACTS,
+  ...CONSOLE_OBSERVATION_TOOL_CONTRACTS,
   ...JAVASCRIPT_RECOVERY_TOOL_CONTRACTS,
   ...SESSION_TOOL_CONTRACTS,
   ...CUTTER_TOOL_CONTRACTS,

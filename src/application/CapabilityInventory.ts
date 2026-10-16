@@ -1,3 +1,8 @@
+// MMA FILE SUMMARY
+// Purpose: Projects canonical tools and configured providers into truthful per-operation availability.
+// Public interface: buildCapabilityInventory() and AvailabilityPolicy.
+// Collaborators: Tool contracts, provider capabilities and client requirements.
+// Invariants: Built-in target-free tools do not inherit active-binary or unrelated provider requirements.
 import { z } from "zod";
 import { sqliteDatabaseCapability } from "./sqlite/SqliteDatabaseCapability.js";
 import type {
@@ -288,6 +293,14 @@ export const compactToolAvailability = (
 };
 
 const availabilityFor = (context: AvailabilityContext): Availability => {
+  // Built-in console adapters accept explicit artifacts/endpoints; they neither
+  // acquire a native target nor depend on the optional JavaScript runtime.
+  if (
+    context.name === "inspect_console_network_capture" ||
+    context.name === "observe_console_debugger" ||
+    context.name === "correlate_console_observations"
+  )
+    return { reason: "available", remediation: null };
   // These built-in workflows accept a caller-selected endpoint; they do not load the optional passive provider.
   if (
     context.name === "observe_web_execution" ||
