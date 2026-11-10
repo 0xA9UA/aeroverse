@@ -39,7 +39,9 @@ env:
 jobs:
   real-recorded-crash:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # Observed cold-download rates project ~22 minutes for container prerequisites.
+    # Keep setup headroom while preserving the verifier's per-command deadlines.
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
