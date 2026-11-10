@@ -121,11 +121,7 @@ it("exports every canonical scope with read authority for admission and keeps te
   expect(telemetry).toBeUndefined();
   const timings = z
     .object({
-      on: z.object({
-        schedule: z.array(z.object({ cron: z.string() })),
-        workflow_dispatch: z.unknown(),
-        workflow_run: z.unknown().optional(),
-      }),
+      on: z.object({ workflow_dispatch: z.unknown() }).strict(),
       permissions: z.record(z.string(), z.string()),
       jobs: z.object({
         report: z.object({
@@ -148,8 +144,7 @@ it("exports every canonical scope with read authority for admission and keeps te
         ),
       ),
     );
-  expect(timings.on.workflow_run).toBeUndefined();
-  expect(timings.on.schedule).toHaveLength(1);
+  expect(Object.keys(timings.on)).toEqual(["workflow_dispatch"]);
   expect(timings.permissions).toEqual({
     contents: "read",
     actions: "read",
@@ -453,27 +448,29 @@ it("leaves cancellation ownership with CI so child lanes cannot cancel another t
 it("keeps fast feedback separate from complete qualification and release proof", async () => {
   const ci = z
     .object({
-      on: z.object({
-        push: z.unknown(),
-        pull_request: z.unknown(),
-        schedule: z.array(z.object({ cron: z.string() })),
-        workflow_call: z.object({
-          inputs: z.object({
-            source_sha: z.object({
-              required: z.literal(true),
-              type: z.literal("string"),
+      on: z
+        .object({
+          push: z.unknown(),
+          pull_request: z.unknown(),
+          workflow_dispatch: z.unknown(),
+          workflow_call: z.object({
+            inputs: z.object({
+              source_sha: z.object({
+                required: z.literal(true),
+                type: z.literal("string"),
+              }),
+              remote_cache_write: z.object({
+                required: z.literal(false),
+                type: z.literal("boolean"),
+                default: z.literal(false),
+              }),
             }),
-            remote_cache_write: z.object({
-              required: z.literal(false),
-              type: z.literal("boolean"),
-              default: z.literal(false),
+            secrets: z.object({
+              TURBO_TOKEN: z.object({ required: z.literal(false) }),
             }),
           }),
-          secrets: z.object({
-            TURBO_TOKEN: z.object({ required: z.literal(false) }),
-          }),
-        }),
-      }),
+        })
+        .strict(),
       concurrency: z.object({
         group: z.string(),
         "cancel-in-progress": z.string(),
@@ -502,9 +499,11 @@ it("keeps fast feedback separate from complete qualification and release proof",
         ),
       ),
     );
-  expect(ci.on.schedule).toEqual([
-    { cron: "23 0-2,4-23 * * *" },
-    { cron: "23 3 * * *" },
+  expect(Object.keys(ci.on).sort()).toEqual([
+    "pull_request",
+    "push",
+    "workflow_call",
+    "workflow_dispatch",
   ]);
   expect(ci.concurrency.group).toContain("'qualification' || 'feedback'");
   expect(ci.concurrency.group).toContain("inputs.source_sha ||");
