@@ -1,6 +1,13 @@
+import {
+  parseJavaScriptRouteDelivery,
+  javascriptRouteDeliveryOptions,
+} from "./javascriptRouteDelivery.js";
+import { deliverCliAnalysisEvidence } from "./analysisEvidenceDelivery.js";
+import { projectAnalysisError } from "../domain/analysisErrorProjection.js";
 import { Cli, z } from "incur";
 
-import { browserContext, browserCliError } from "../cliBrowserContext.js";
+import { browserCliError } from "./browserCliError.js";
+import { createBrowserObservationProvider } from "../composition/browserObservation.js";
 import {
   analyzeWebBundle,
   inspectWebPage,
@@ -21,8 +28,10 @@ import {
   browserPageInspectionOptions,
   browserScopeOptions,
   observationDuration,
+  selectedCommandTimeout,
 } from "../cliObservationOptions.js";
 import { withCommandCancellation } from "./commandCancellation.js";
+import { finishAnalysisCommand } from "./finishAnalysisCommand.js";
 
 /** Register CLI equivalents of the passive browser MCP tools. */
 export const registerBrowserCommands = (
@@ -47,11 +56,13 @@ const registerTargetList = (
         .string()
         .describe("Loopback CDP HTTP endpoint or browser WebSocket URL"),
     }),
-    options: z.object({ ...browserScopeOptions }),
+    options: z.object({
+      allowedOrigins: browserScopeOptions.allowedOrigins,
+    }),
     run: ({ args, options }) =>
       withCommandCancellation((signal) =>
         logCliCommand(logger, "list-browser-targets", async () => {
-          const context = browserContext();
+          const provider = createBrowserObservationProvider();
           const input = {
             cdp_endpoint: args.endpoint,
             allowed_origins: options.allowedOrigins,
@@ -65,12 +76,17 @@ const registerTargetList = (
                 input,
               ),
             );
-          const result = await listBrowserTargets(
-            context.provider,
-            parsed.data,
-            { signal },
+          return await finishAnalysisCommand(
+            () => listBrowserTargets(provider, parsed.data, { signal }),
+            {
+              close: async () => {
+                await provider.close?.();
+              },
+            },
+            provider.identity().id,
+            "list_browser_targets",
+            signal,
           );
-          return result.ok ? result.value : browserCliError(result.error);
         }),
       ),
   });
@@ -93,7 +109,7 @@ const registerPageInspection = (
     run: ({ args, options }) =>
       withCommandCancellation((signal) =>
         logCliCommand(logger, "inspect-web-page", async () => {
-          const context = browserContext();
+          const provider = createBrowserObservationProvider();
           const input = {
             cdp_endpoint: args.endpoint,
             allowed_origins: options.allowedOrigins,
@@ -106,6 +122,7 @@ const registerPageInspection = (
             include_script_sources: options.includeScriptSources,
             include_storage_keys: options.includeStorageKeys,
             include_storage_fingerprints: options.includeStorageFingerprints,
+            ...selectedCommandTimeout(options.commandTimeoutMs),
           };
           const parsed = inspectWebPageInputSchema.safeParse(input);
           if (!parsed.success)
@@ -116,10 +133,17 @@ const registerPageInspection = (
                 input,
               ),
             );
-          const result = await inspectWebPage(context.provider, parsed.data, {
+          return await finishAnalysisCommand(
+            () => inspectWebPage(provider, parsed.data, { signal }),
+            {
+              close: async () => {
+                await provider.close?.();
+              },
+            },
+            provider.identity().id,
+            "inspect_web_page",
             signal,
-          });
-          return result.ok ? result.value : browserCliError(result.error);
+          );
         }),
       ),
   });
@@ -140,16 +164,28 @@ const registerBundleAnalysis = (
     }),
     options: z.object({
       ...browserScopeOptions,
+      ...javascriptRouteDeliveryOptions,
       observationMs: observationDuration(500),
       fetchSourceMaps: z
         .boolean()
         .default(false)
         .describe("Fetch source maps referenced by captured scripts"),
+      maxHeapMb: analyzeWebBundleInputSchema.shape.max_heap_mb,
+      analysisTimeoutMs: analyzeWebBundleInputSchema.shape.analysis_timeout_ms,
+      totalAnalysisTimeoutMs:
+        analyzeWebBundleInputSchema.shape.total_analysis_timeout_ms,
+      sourceMapFetchTimeoutMs:
+        analyzeWebBundleInputSchema.shape.source_map_fetch_timeout_ms,
     }),
     run: ({ args, options }) =>
       withCommandCancellation((signal) =>
         logCliCommand(logger, "analyze-web-bundle", async () => {
-          const context = browserContext();
+          const delivery = parseJavaScriptRouteDelivery(
+            "analyze_web_bundle",
+            options,
+          );
+          if (!delivery.ok) return projectAnalysisError(delivery.error);
+          const provider = createBrowserObservationProvider();
           const input = {
             cdp_endpoint: args.endpoint,
             allowed_origins: options.allowedOrigins,
@@ -157,6 +193,21 @@ const registerBundleAnalysis = (
             observation_ms: options.observationMs,
             include_script_sources: true,
             fetch_source_maps: options.fetchSourceMaps,
+            ...(options.maxHeapMb === undefined
+              ? {}
+              : { max_heap_mb: options.maxHeapMb }),
+            ...(options.analysisTimeoutMs === undefined
+              ? {}
+              : { analysis_timeout_ms: options.analysisTimeoutMs }),
+            ...(options.totalAnalysisTimeoutMs === undefined
+              ? {}
+              : { total_analysis_timeout_ms: options.totalAnalysisTimeoutMs }),
+            ...(options.sourceMapFetchTimeoutMs === undefined
+              ? {}
+              : {
+                  source_map_fetch_timeout_ms: options.sourceMapFetchTimeoutMs,
+                }),
+            ...selectedCommandTimeout(options.commandTimeoutMs),
           };
           const parsed = analyzeWebBundleInputSchema.safeParse(input);
           if (!parsed.success)
@@ -167,10 +218,18 @@ const registerBundleAnalysis = (
                 input,
               ),
             );
-          const result = await analyzeWebBundle(context.provider, parsed.data, {
+          return deliverCliAnalysisEvidence({
+            ...delivery.value,
+            run: () => analyzeWebBundle(provider, parsed.data, { signal }),
+            service: {
+              close: async () => {
+                await provider.close?.();
+              },
+            },
+            providerId: provider.identity().id,
+            operation: "analyze_web_bundle",
             signal,
           });
-          return result.ok ? result.value : browserCliError(result.error);
         }),
       ),
   });
@@ -195,12 +254,13 @@ const registerObservationSession = (
     run: ({ args, options }) =>
       withCommandCancellation((signal) =>
         logCliCommand(logger, "observe-web-session", async () => {
-          const context = browserContext();
+          const provider = createBrowserObservationProvider();
           const input = {
             cdp_endpoint: args.endpoint,
             allowed_origins: options.allowedOrigins,
             target_id: args.targetId,
             observation_ms: options.observationMs,
+            ...selectedCommandTimeout(options.commandTimeoutMs),
           };
           const parsed = observeWebSessionInputSchema.safeParse(input);
           if (!parsed.success)
@@ -211,12 +271,17 @@ const registerObservationSession = (
                 input,
               ),
             );
-          const result = await observeWebSession(
-            context.provider,
-            parsed.data,
-            { signal },
+          return await finishAnalysisCommand(
+            () => observeWebSession(provider, parsed.data, { signal }),
+            {
+              close: async () => {
+                await provider.close?.();
+              },
+            },
+            provider.identity().id,
+            "observe_web_session",
+            signal,
           );
-          return result.ok ? result.value : browserCliError(result.error);
         }),
       ),
   });

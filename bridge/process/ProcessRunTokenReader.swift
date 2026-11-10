@@ -6,22 +6,46 @@ struct RunTokenObservation: Encodable {
   let state: String
   let run_id: String?
   let reason: String?
+  var diagnostic: ProcargsDiagnostic? = nil
+}
+
+/** Structural parser facts only; never retain argument or environment bytes. */
+struct ProcargsDiagnostic: Encodable {
+  let stage: String
+  let buffer_bytes: Int
+  let argument_count: Int32?
+  let offset: Int
+  let pointer_size: Int
+  var code_signing_flags: UInt32? = nil
 }
 
 struct ProcessIdentityObservation: Encodable {
   let pid: Int32
   let state: String
   let identity: String?
+  let effective_uid: UInt32?
+  let lifecycle: String?
+  let relation: ProcessRelationObservation?
   let reason: String?
 }
 
-private struct ProcessMetadata {
+struct ProcessRelationObservation: Encodable {
+  let state: String
+  let parent_pid: Int32
+  let process_group_id: Int32
+}
+
+struct ProcessMetadata {
   let identity: String
+  let effectiveUid: UInt32
+  let lifecycle: String
+  let parentPid: Int32
+  let processGroupId: Int32
   let pointerSize: Int
 }
 
 struct ProcessSnapshot {
-  fileprivate let metadata: [Int32: ProcessMetadata]
+  let metadata: [Int32: ProcessMetadata]
   let failure: String?
 }
 
@@ -75,6 +99,10 @@ func readProcessSnapshot(
           process.kp_proc.p_pid,
           ProcessMetadata(
             identity: "\(start.tv_sec):\(start.tv_usec)",
+            effectiveUid: process.kp_eproc.e_ucred.cr_uid,
+            lifecycle: process.kp_proc.p_stat == SZOMB ? "zombie" : "non-zombie",
+            parentPid: process.kp_eproc.e_ppid,
+            processGroupId: process.kp_eproc.e_pgid,
             pointerSize: process.kp_proc.p_flag & P_LP64 != 0 ? 8 : 4
           )
         )
@@ -87,24 +115,65 @@ func readProcessSnapshot(
 }
 
 func readProcessIdentities(pids: [Int32]) -> [ProcessIdentityObservation] {
-  let snapshot = readProcessSnapshot()
+  readProcessIdentities(pids: pids, snapshot: readProcessSnapshot())
+}
+
+func readProcessIdentities(
+  pids: [Int32],
+  snapshot: ProcessSnapshot
+) -> [ProcessIdentityObservation] {
   return pids.map { pid in
+    guard pid > 0 else {
+      return unavailableIdentity(pid: pid, reason: "invalid_process_id")
+    }
     guard let metadata = snapshot.metadata[pid] else {
-      return unavailableIdentity(
+      if let failure = snapshot.failure {
+        return unavailableIdentity(pid: pid, reason: failure)
+      }
+      // This records absence from this successful KERN_PROC_ALL snapshot only.
+      // Unlike the Linux procfs path, it has no PID-specific kill(0)
+      // corroboration; callers must not treat it as universal or future exit
+      // proof.
+      return ProcessIdentityObservation(
         pid: pid,
-        reason: snapshot.failure ?? "process_not_in_snapshot"
+        state: "absent",
+        identity: nil,
+        effective_uid: nil,
+        lifecycle: nil,
+        relation: nil,
+        reason: "not-in-snapshot"
       )
     }
-    return ProcessIdentityObservation(pid: pid, state: "readable", identity: metadata.identity, reason: nil)
+    return ProcessIdentityObservation(
+      pid: pid,
+      state: "readable",
+      identity: metadata.identity,
+      effective_uid: metadata.effectiveUid,
+      lifecycle: metadata.lifecycle,
+      relation: ProcessRelationObservation(
+        state: "observed",
+        parent_pid: metadata.parentPid,
+        process_group_id: metadata.processGroupId
+      ),
+      reason: nil
+    )
   }
 }
 
 private func unavailableIdentity(pid: Int32, reason: String) -> ProcessIdentityObservation {
-  ProcessIdentityObservation(pid: pid, state: "unavailable", identity: nil, reason: reason)
+  ProcessIdentityObservation(
+    pid: pid,
+    state: "unavailable",
+    identity: nil,
+    effective_uid: nil,
+    lifecycle: nil,
+    relation: nil,
+    reason: reason
+  )
 }
 
 enum RunTokenReadError: Error {
-  case invalidBuffer
+  case invalidBuffer(ProcargsDiagnostic)
   case duplicateToken
   case invalidTokenEncoding
   case environmentUnavailable
@@ -184,8 +253,16 @@ func processRunTokenObservation(
       return unavailable(pid: pid, reason: "invalid_run_token_encoding")
     case .appleVectorUnavailable:
       return unavailable(pid: pid, reason: "apple_vector_unavailable")
-    case .invalidBuffer:
-      return unavailable(pid: pid, reason: "malformed_procargs")
+    case .invalidBuffer(var diagnostic):
+      diagnostic.code_signing_flags = codeSigningFlags()
+      // XNU withholds restricted environments from KERN_PROCARGS2. A path-padding
+      // rejection cannot recover that environment; retain the parser facts and
+      // classify only this observed restricted failure, without reinterpreting bytes.
+      if diagnostic.stage == "path_padding",
+         let flags = diagnostic.code_signing_flags, (flags & csRestrict) != 0 {
+        return unavailable(pid: pid, reason: "restricted_process_environment_withheld", diagnostic: diagnostic)
+      }
+      return unavailable(pid: pid, reason: "malformed_procargs", diagnostic: diagnostic)
     }
   }
 }
@@ -210,7 +287,10 @@ private func readRunToken(pid: Int32, pointerSize: Int) -> RunTokenObservation {
   } catch let failure as RunTokenReadError {
     parse = .failure(failure)
   } catch {
-    parse = .failure(.invalidBuffer)
+    parse = .failure(.invalidBuffer(ProcargsDiagnostic(
+      stage: "unexpected_error", buffer_bytes: bytes.count,
+      argument_count: nil, offset: 0, pointer_size: pointerSize
+    )))
   }
   return processRunTokenObservation(
     pid: pid,
@@ -244,27 +324,36 @@ func parseProcessEnvironment(
   in bytes: [UInt8],
   pointerSize: Int = MemoryLayout<UnsafeRawPointer>.size
 ) throws -> ParsedRunToken {
-  guard bytes.count >= MemoryLayout<Int32>.size else { throw RunTokenReadError.invalidBuffer }
-  let argc = bytes.withUnsafeBytes { $0.loadUnaligned(as: Int32.self).littleEndian }
-  guard argc >= 0, Int(argc) <= bytes.count else { throw RunTokenReadError.invalidBuffer }
-  var offset = MemoryLayout<Int32>.size
-  guard let executablePath = readString(in: bytes, offset: &offset) else {
-    throw RunTokenReadError.invalidBuffer
+  var offset = 0
+  var argumentCount: Int32?
+  func invalidBuffer(_ stage: String) -> RunTokenReadError {
+    .invalidBuffer(ProcargsDiagnostic(
+      stage: stage, buffer_bytes: bytes.count, argument_count: argumentCount,
+      offset: offset, pointer_size: pointerSize
+    ))
   }
-  guard pointerSize == 4 || pointerSize == 8 else { throw RunTokenReadError.invalidBuffer }
+  guard bytes.count >= MemoryLayout<Int32>.size else { throw invalidBuffer("header") }
+  let argc = bytes.withUnsafeBytes { $0.loadUnaligned(as: Int32.self).littleEndian }
+  argumentCount = argc
+  offset = MemoryLayout<Int32>.size
+  guard argc >= 0, Int(argc) <= bytes.count else { throw invalidBuffer("argc") }
+  guard let executablePath = readString(in: bytes, offset: &offset) else {
+    throw invalidBuffer("executable_path")
+  }
+  guard pointerSize == 4 || pointerSize == 8 else { throw invalidBuffer("pointer_size") }
   let pathRecordSize = Array("executable_path=".utf8).count + executablePath.count + 1
   let padding = (pointerSize - pathRecordSize % pointerSize) % pointerSize
   guard offset + padding <= bytes.count,
         bytes[offset..<(offset + padding)].allSatisfy({ $0 == 0 }) else {
-    throw RunTokenReadError.invalidBuffer
+    throw invalidBuffer("path_padding")
   }
   offset += padding
   for _ in 0..<argc {
     guard readString(in: bytes, offset: &offset, allowEmpty: true) != nil else {
-      throw RunTokenReadError.invalidBuffer
+      throw invalidBuffer("argument")
     }
   }
-  guard bytes.last == 0 else { throw RunTokenReadError.invalidBuffer }
+  guard bytes.last == 0 else { throw invalidBuffer("trailing_terminator") }
   if offset == bytes.count {
     throw RunTokenReadError.environmentUnavailable
   }
@@ -282,7 +371,7 @@ func parseProcessEnvironment(
       continue
     }
     guard let entry = readString(in: bytes, offset: &offset) else {
-      throw RunTokenReadError.invalidBuffer
+      throw invalidBuffer("trailing_entry")
     }
     trailingEntries.append(entry)
   }
@@ -334,6 +423,10 @@ private func readString(
   return string
 }
 
-private func unavailable(pid: Int32, reason: String) -> RunTokenObservation {
-  RunTokenObservation(pid: pid, state: "unavailable", run_id: nil, reason: reason)
+private func unavailable(
+  pid: Int32,
+  reason: String,
+  diagnostic: ProcargsDiagnostic? = nil
+) -> RunTokenObservation {
+  RunTokenObservation(pid: pid, state: "unavailable", run_id: nil, reason: reason, diagnostic: diagnostic)
 }

@@ -23,6 +23,24 @@ func fixture(
   return bytes
 }
 
+func malformedObservation(
+  _ bytes: [UInt8],
+  pointerSize: Int = 8,
+  flags: UInt32? = 0x0400_0800
+) throws -> Any {
+  do {
+    _ = try parseProcessEnvironment(in: bytes, pointerSize: pointerSize)
+    fatalError("Expected a malformed fixture")
+  } catch let failure as RunTokenReadError {
+    let observation = processRunTokenObservation(
+      pid: 1,
+      parse: .failure(failure),
+      codeSigningFlags: { flags }
+    )
+    return try JSONSerialization.jsonObject(with: JSONEncoder().encode(observation))
+  }
+}
+
 @main
 struct ProcessRunTokenParserProbe {
   static func main() throws {
@@ -189,8 +207,30 @@ struct ProcessRunTokenParserProbe {
       parse: .failure(.environmentUnavailable),
       codeSigningFlags: { 0 }
     )
+    let negativeArgc = withUnsafeBytes(of: Int32(-1).littleEndian, Array.init)
+    let privateFixture = fixture(
+      arguments: ["private-argument"],
+      environment: ["PRIVATE_VALUE=private-environment"]
+    )
+    var invalidPadding = privateFixture
+    invalidPadding[24] = 1
+    // Synthetic bytes reproduce the CI guard and scalar facts, not captured argv.
+    let syntheticPath = Array(("/" + String(repeating: "p", count: 106)).utf8) + [0]
+    var observedPaddingShape = withUnsafeBytes(of: Int32(1).littleEndian, Array.init)
+    observedPaddingShape.append(contentsOf: syntheticPath + syntheticPath + [0])
 
     let result: [String: Any] = [
+      "restrictedPaddingProjection": [
+        try malformedObservation(observedPaddingShape, flags: 637618689),
+        try malformedObservation(observedPaddingShape, flags: 0),
+        try malformedObservation(observedPaddingShape, flags: nil),
+      ],
+      "malformedProcargs": [
+        try malformedObservation(truncatedArgv),
+        try malformedObservation(negativeArgc),
+        try malformedObservation(privateFixture, pointerSize: -1),
+        try malformedObservation(invalidPadding),
+      ],
       "argvDecoyIgnored": argvDecoy.runId == nil && argvDecoy.environmentEntryCount == 1,
       "realTokenRead": realToken.runId == "owned-token",
       "readableEnvironmentWithoutToken": [

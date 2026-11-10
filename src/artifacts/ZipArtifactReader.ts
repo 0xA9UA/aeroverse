@@ -1,3 +1,4 @@
+import { assertArtifactReadActive } from "./ArtifactFileOperation.js";
 import type { FileHandle } from "node:fs/promises";
 import { PassThrough, type Readable } from "node:stream";
 import { once } from "node:events";
@@ -35,10 +36,10 @@ import {
 } from "./ArtifactReader.js";
 import type { ZipPackageFormat } from "../domain/zipPackageFormat.js";
 import {
-  ARTIFACT_DECOMPRESSION_RATIO,
-  artifactDecompressionBudgetBytes,
-  MINIMUM_ARTIFACT_DECOMPRESSION_BYTES,
-} from "../domain/artifactDecompressionBudget.js";
+  ARTIFACT_EXPANSION_RATIO,
+  artifactExpansionBudgetBytes,
+  MINIMUM_ARTIFACT_EXPANDED_BYTES,
+} from "../domain/artifactExpansionBudget.js";
 import { OwnedFileHandle } from "../filesystem/OwnedFileHandle.js";
 import {
   NonRegularFileReadError,
@@ -74,12 +75,13 @@ class NodeFileReader extends Reader<string> {
   }
 
   async #initialize(): Promise<void> {
+    let source: StableRegularFileDescriptor;
     try {
-      const handle =
-        this.admitted?.handle ??
+      source =
+        this.admitted ??
         (await openRegularFile(this.path, { symlinks: "reject" }));
-      this.#handle = handle;
-      if (this.#ownsHandle) this.#owner = new OwnedFileHandle(handle);
+      this.#handle = source.handle;
+      if (this.#ownsHandle) this.#owner = new OwnedFileHandle(source.handle);
     } catch (cause: unknown) {
       if (cause instanceof RegularFileAdmissionFailure) {
         this.#owner = cause.owner;
@@ -107,17 +109,15 @@ class NodeFileReader extends Reader<string> {
         );
       throw cause;
     }
-    const metadata = await this.#handle.stat();
-    if (
-      !metadata.isFile() ||
-      (this.admitted !== undefined &&
-        !sameRegularFileState(this.admitted.initial, metadata))
-    )
-      throw new ArtifactReaderFailure(
-        "integrity",
-        `ZIP source identity changed before reading: ${this.path}`,
-      );
-    this.size = metadata.size;
+    if (this.admitted !== undefined) {
+      const metadata = await source.handle.stat();
+      if (!sameRegularFileState(source.initial, metadata))
+        throw new ArtifactReaderFailure(
+          "integrity",
+          `ZIP source identity changed before reading: ${this.path}`,
+        );
+    }
+    this.size = source.initial.size;
   }
 
   override async readUint8Array(
@@ -127,6 +127,13 @@ class NodeFileReader extends Reader<string> {
     const handle = this.#handle;
     if (handle === undefined) throw new Error("ZIP reader is not initialized");
     const readBytes = Math.min(length, this.size - index);
+    // A central-directory offset can point past EOF. Type that malformed ZIP
+    // read before a negative size reaches Buffer.alloc and becomes an I/O error.
+    if (readBytes < 0)
+      throw new ArtifactReaderFailure(
+        "format",
+        `ZIP archive is malformed: read at ${index} extends beyond the ${this.size}-byte archive`,
+      );
     if (
       this.maximumReadBytes !== undefined &&
       readBytes > this.maximumReadBytes
@@ -136,8 +143,22 @@ class NodeFileReader extends Reader<string> {
         `ZIP metadata read requires ${readBytes} bytes, exceeding the ${this.maximumReadBytes}-byte read budget`,
       );
     const bytes = Buffer.alloc(readBytes);
-    const read = await handle.read(bytes, 0, bytes.length, index);
-    return bytes.subarray(0, read.bytesRead);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const { bytesRead } = await handle.read(
+        bytes,
+        offset,
+        bytes.length - offset,
+        index + offset,
+      );
+      if (bytesRead === 0)
+        throw new ArtifactReaderFailure(
+          "integrity",
+          `ZIP source ended before its admitted extent: ${this.path}`,
+        );
+      offset += bytesRead;
+    }
+    return bytes;
   }
 
   async closeHandle(): Promise<void> {
@@ -187,10 +208,11 @@ export class ZipArtifactReader implements ArtifactReader {
     for await (const entry of typedZipFailures(
       this.#reader.getEntriesGenerator({ decodeText: decodeZipEntryText }),
     )) {
-      abortIfNeeded(signal);
+      assertArtifactReadActive(signal);
       // ZIP member identity is its directory occurrence, not its filename.
       // Logical path uniqueness belongs to the artifact inventory boundary.
       const metadata = projectZipEntry(entry, index++);
+      if (metadata === undefined) continue;
       // zip.js enforces each member's declared output size, so this sum bounds streamed work.
       if (
         metadata.kind === "file" &&
@@ -200,11 +222,11 @@ export class ZipArtifactReader implements ArtifactReader {
         metadata.declaredSize >= 0
       ) {
         declaredFileBytes += metadata.declaredSize;
-        const budget = artifactDecompressionBudgetBytes(this.#source.size);
+        const budget = artifactExpansionBudgetBytes(this.#source.size);
         if (declaredFileBytes > budget)
           throw new ArtifactReaderFailure(
             "limit",
-            `ZIP entries declare ${String(declaredFileBytes)} uncompressed bytes, exceeding this archive's ${String(budget)}-byte decompression budget (${String(MINIMUM_ARTIFACT_DECOMPRESSION_BYTES)}-byte minimum, ${String(ARTIFACT_DECOMPRESSION_RATIO)}x archive size); a small archive cannot expand this far`,
+            `ZIP entries declare ${String(declaredFileBytes)} uncompressed bytes, exceeding this archive's ${String(budget)}-byte decompression budget (${String(MINIMUM_ARTIFACT_EXPANDED_BYTES)}-byte minimum, ${String(ARTIFACT_EXPANSION_RATIO)}x archive size); a small archive cannot expand this far`,
           );
       }
       const stored = this.#entries.get(metadata.adapterKey);
@@ -223,7 +245,7 @@ export class ZipArtifactReader implements ArtifactReader {
   }
 
   open(entry: ArtifactEntry, signal?: AbortSignal): Promise<Readable> {
-    abortIfNeeded(signal);
+    assertArtifactReadActive(signal);
     const stored = this.#entries.get(entry.adapterKey);
     if (stored === undefined || !sameArtifactEntry(entry, stored.metadata))
       return Promise.reject(
@@ -233,7 +255,7 @@ export class ZipArtifactReader implements ArtifactReader {
         ),
       );
     const source = stored.source;
-    if (source.directory || isSymlink(source))
+    if (source.directory || source.symlink)
       return Promise.reject(
         new ArtifactReaderFailure("format", "ZIP entry is not a regular file"),
       );
@@ -258,21 +280,54 @@ export class ZipArtifactReader implements ArtifactReader {
   }
 }
 
-const projectZipEntry = (entry: Entry, index: number): ArtifactEntry => {
-  const symlink = isSymlink(entry);
+const projectZipEntry = (
+  entry: Entry,
+  index: number,
+): ArtifactEntry | undefined => {
+  const kind = entry.symlink
+    ? "symlink"
+    : entry.directory
+      ? "directory"
+      : "file";
+  const sourcePath = zipEntryPath(entry);
+  const path = sourcePath.replace(/^(?:\.\/)+/u, "");
+  // Root directory markers carry no inventory occurrence. A file with this
+  // spelling is still passed to the shared path validator and rejected there.
+  if (kind === "directory" && (path === "" || path === ".")) return undefined;
   return {
-    path: zipEntryPath(entry),
-    kind: entry.directory ? "directory" : symlink ? "symlink" : "file",
-    declaredSize: entry.directory ? null : entry.uncompressedSize,
-    compressedSize: entry.directory ? null : entry.compressedSize,
+    path,
+    ...(path === sourcePath ? {} : { sourcePath }),
+    kind,
+    declaredSize: kind === "directory" ? null : entry.uncompressedSize,
+    compressedSize: kind === "directory" ? null : entry.compressedSize,
     executable: entry.executable,
     encrypted: entry.encrypted,
     byteOffset: null,
-    declaredSha256: null,
+    declaredIntegrity: null,
     unpacked: false,
-    limitations: symlink ? ["Archive symlink target was not read."] : [],
+    limitations: [
+      ...(kind === "symlink" ? ["Archive symlink target was not read."] : []),
+      ...(path === sourcePath
+        ? []
+        : [
+            `ZIP member name ${JSON.stringify(sourcePath)} has a leading current-directory prefix omitted from its logical path.`,
+          ]),
+      ...legacyNameLimitations(entry),
+    ],
     adapterKey: `zip-entry:${index}`,
   };
+};
+
+/** Preserve source bytes when an unflagged legacy name may use another code page. */
+const legacyNameLimitations = (entry: Entry): readonly string[] => {
+  if (entry.filenameUTF8 || entry.extraFieldUnicodePath?.valid === true)
+    return [];
+  const bytes = entry.rawFilename;
+  if (!bytes.some((byte) => byte >= 0x80)) return [];
+  const hex = Buffer.from(bytes).toString("hex");
+  return [
+    `ZIP name uses CP437 fallback; source encoding unverified; raw hex: ${hex}.`,
+  ];
 };
 
 const decodeZipEntryText = (
@@ -331,7 +386,9 @@ const extractStream = (entry: FileEntry, signal?: AbortSignal): Readable => {
     // against `getData` rejecting with its own AbortError. That ordering is what
     // keeps the caller-visible failure typed as `cancelled`.
     output.destroy(
-      new ArtifactReaderFailure("cancelled", "ZIP operation cancelled"),
+      new ArtifactReaderFailure("cancelled", "ZIP operation cancelled", {
+        cause: signal?.reason,
+      }),
     );
   };
   signal?.addEventListener("abort", onAbort, { once: true });
@@ -344,7 +401,7 @@ const extractStream = (entry: FileEntry, signal?: AbortSignal): Readable => {
   });
   const writable = new WritableStream<Uint8Array>({
     write: async (chunk) => {
-      abortIfNeeded(signal);
+      assertArtifactReadActive(signal);
       if (!output.write(Buffer.from(chunk)))
         await once(output, "drain", { signal: controller.signal });
     },
@@ -360,7 +417,7 @@ const extractStream = (entry: FileEntry, signal?: AbortSignal): Readable => {
       signal: controller.signal,
       checkSignature: true,
       checkOverlappingEntry: true,
-      onprogress: () => abortIfNeeded(signal),
+      onprogress: () => assertArtifactReadActive(signal),
     })
     .catch((cause: unknown) => output.destroy(toError(typedZipFailure(cause))));
   return output;
@@ -416,14 +473,6 @@ async function* typedZipFailures<T>(
     throw typedZipFailure(cause);
   }
 }
-
-const isSymlink = (entry: Entry): boolean =>
-  entry.unixMode !== undefined && (entry.unixMode & 0o170000) === 0o120000;
-
-const abortIfNeeded = (signal?: AbortSignal): void => {
-  if (signal?.aborted === true)
-    throw new ArtifactReaderFailure("cancelled", "ZIP operation cancelled");
-};
 
 const toError = (cause: unknown): Error =>
   cause instanceof Error ? cause : new Error("ZIP extraction failed");

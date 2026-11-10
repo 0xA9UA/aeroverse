@@ -68,7 +68,9 @@ export const webArtifactReadError = (
   if (cause instanceof ArtifactReaderFailure && cause.cleanup !== undefined) {
     const primary =
       signal?.aborted === true
-        ? new AnalysisCancelledError(context.operation, { cause })
+        ? new AnalysisCancelledError(context.operation, {
+            cause: signal.reason,
+          })
         : new ArtifactOperationError(
             context.operation,
             cause.reason,
@@ -88,7 +90,9 @@ export const webArtifactReadError = (
     );
   }
   if (signal?.aborted === true)
-    return new AnalysisCancelledError(context.operation, { cause });
+    return new AnalysisCancelledError(context.operation, {
+      cause: signal.reason,
+    });
   const selection = context.callerSelected
     ? selectedFileError(cause, context)
     : undefined;
@@ -111,7 +115,16 @@ export const webArtifactReadError = (
       context.operation,
       "io",
       undefined,
-      `${context.field.join(".")}: ${cause.code}: ${cause.message}`,
+      `${context.targetPath}: ${cause.code}: ${cause.message}`,
+      { cause },
+    );
+  if (!context.callerSelected && cause instanceof WebArtifactFormatFailure)
+    return new ArtifactOperationError(
+      context.operation,
+      "format",
+      undefined,
+      `${context.targetPath}: ${cause.message}`,
+      { cause },
     );
   if (cause instanceof WebArtifactFormatFailure || cause instanceof z.ZodError)
     return new AnalysisInputError(context.operation, { cause }, [

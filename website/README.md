@@ -14,6 +14,13 @@ downloads and check the site. There is no frontend framework, bundler or npm
 dependency. A build generates all editions in `website/_site/`. The resulting
 files work as ordinary static files; language switching needs no JavaScript.
 
+Korean editions load the variable Noto Sans KR webfont through Google Fonts
+(`fonts.googleapis.com` and `fonts.gstatic.com`) so the preferred Korean font
+does not depend on fonts installed on the reader's PC. Other editions keep
+system fonts. Text remains visible while the font loads (`display=swap`), and
+local Korean fonts are used if Google Fonts is unavailable. The stylesheet is
+added during translation rendering; generated `_site/` pages are not authored.
+
 [style-guide.md](style-guide.md) explains the writing, page structure, figures,
 visual system and review process. Read it before adding or revising a page.
 
@@ -174,12 +181,36 @@ describe its recorded investigation; update them only when repeating that work.
 - `public/showcase/ctf/index.html`: DownUnderCTF's masked-squares flag checker, extracted equations and real process captures.
 - `public/get-started/index.html`: agent setup, first CLI result and provider guides.
 - `public/faq/index.html`: concise answers about setup, updates, analysis and troubleshooting.
+- `public/contributors/index.html`: one searchable, alphabetical grid of GitHub contributors, with profile links and contribution guidance.
 - `public/guides/`: a guide hub and native, JavaScript/Electron and browser examples.
 - `public/examples/`: downloadable Electron source and an interactive Notes browser app.
 - `public/assets/`: shared styles, interactions, favicon and explanatory figures.
 
 Navigation and assets use relative paths, so the same files work at the local
 root and a GitHub Pages project path such as `/rea/`.
+
+### Update contributors
+
+`public/contributors/people.json` is a dated snapshot of the repository's public
+GitHub contributor list, including accounts GitHub identifies as bots. Every
+profile has the same presentation; there are no team tiers or contribution
+rankings. The page links the source list and shows the snapshot date. Avatars
+load from GitHub; usernames and profile links remain usable without images or
+JavaScript. Search is a small progressive enhancement.
+
+Refresh the snapshot with GitHub CLI available, then regenerate the marked
+`website:contributors` region from `templates/contributors.html.tmpl`:
+
+```sh
+python3 scripts/website.py contributors
+python3 scripts/website.py sync
+python3 scripts/website.py translations extract
+python3 scripts/website.py check
+```
+
+Refresh fetches every API page and validates the complete result before replacing
+the snapshot. Review and commit the JSON, rendered page and catalog updates
+together. Builds and offline checks use that snapshot, not the live API.
 
 ## Search and sharing metadata
 
@@ -365,8 +396,8 @@ Each introduces the goal, then follows three named steps: ask a question,
 find the rule, and try a reconstruction. The question and plain-language finding
 are on the left, with the demo on the right; mobile keeps that reading order.
 Code excerpts and source details join the optional investigation flow and checks
-in each disclosure. Calculator’s excerpt
-comes from an installed model DLL; Microsoft’s public implementation supplies
+in each disclosure. Calculator's excerpt
+comes from an installed model DLL; Microsoft's public implementation supplies
 names and a crosscheck. Its controls apply the percentage rule to generic inputs.
 The target guides end with an optional larger-project disclosure, preserving
 the original website-cloning and game-reconstruction prompts.

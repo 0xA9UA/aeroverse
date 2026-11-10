@@ -17,7 +17,10 @@ import {
 } from "./analysisSnapshot.fixture.js";
 import { createEvidence } from "./evidence.js";
 import { createEvidenceBundle } from "./evidenceBundle.js";
-import type { BinaryTarget } from "./binaryTargetTypes.js";
+import {
+  RAW_ONLY_ARCHITECTURES,
+  type BinaryTarget,
+} from "./binaryTargetTypes.js";
 
 const snapshotWithHistoricalEvidence = () => {
   const target = snapshotTarget(ANALYSIS_SNAPSHOT_TARGET);
@@ -71,26 +74,29 @@ const snapshotWithHistoricalEvidence = () => {
 };
 
 describe("analysis snapshot target identity", () => {
-  it("keeps 6502 confined to executable raw snapshots", () => {
-    const target = {
-      sha256: ANALYSIS_SNAPSHOT_TARGET.sha256,
-      kind: "executable",
-      architecture: "6502",
-    };
-    expect(
-      analysisSnapshotSchema.shape.target.safeParse({
-        ...target,
-        format: "pe",
-      }).success,
-    ).toBe(false);
-    expect(
-      analysisSnapshotSchema.shape.target.safeParse({
-        ...target,
-        format: "raw-binary",
-        entry_point: "0x8001",
-      }).success,
-    ).toBe(true);
-  });
+  it.each(RAW_ONLY_ARCHITECTURES)(
+    "keeps %s confined to executable raw snapshots",
+    (architecture) => {
+      const target = {
+        sha256: ANALYSIS_SNAPSHOT_TARGET.sha256,
+        kind: "executable",
+        architecture,
+      };
+      expect(
+        analysisSnapshotSchema.shape.target.safeParse({
+          ...target,
+          format: "pe",
+        }).success,
+      ).toBe(false);
+      expect(
+        analysisSnapshotSchema.shape.target.safeParse({
+          ...target,
+          format: "raw-binary",
+          entry_point: "0x8000",
+        }).success,
+      ).toBe(true);
+    },
+  );
 
   it("partitions raw snapshots and query identities by the canonical entry", () => {
     const target: BinaryTarget = {
@@ -142,45 +148,48 @@ describe("analysis snapshot target identity", () => {
 });
 
 describe("analysis snapshot nested subject contract", () => {
-  it("rejects raw-only 6502 in nested detected execution subjects", () => {
-    const { snapshot } = snapshotWithHistoricalEvidence();
-    const entry = snapshot.entries[0];
-    if (entry === undefined) throw new Error("Fixture has no snapshot entry");
-    const malformedSubject = {
-      ...entry.execution.subject,
-      format: "pe",
-      architecture: "6502",
-    };
-    expect(
-      analysisSnapshotSchema.safeParse({
-        ...snapshot,
-        entries: [
-          {
-            ...entry,
-            execution: {
-              ...entry.execution,
-              subject: malformedSubject,
+  it.each(RAW_ONLY_ARCHITECTURES)(
+    "rejects raw-only %s in nested detected execution subjects",
+    (architecture) => {
+      const { snapshot } = snapshotWithHistoricalEvidence();
+      const entry = snapshot.entries[0];
+      if (entry === undefined) throw new Error("Fixture has no snapshot entry");
+      const malformedSubject = {
+        ...entry.execution.subject,
+        format: "pe",
+        architecture,
+      };
+      expect(
+        analysisSnapshotSchema.safeParse({
+          ...snapshot,
+          entries: [
+            {
+              ...entry,
+              execution: {
+                ...entry.execution,
+                subject: malformedSubject,
+              },
             },
-          },
-        ],
-      }).success,
-    ).toBe(false);
-    expect(
-      analysisSnapshotSchema.safeParse({
-        ...snapshot,
-        workflow_entries: [
-          {
-            ...entry,
-            execution: {
-              ...entry.execution,
-              analysis_profile: snapshot.binding.analysis_profile,
-              subject: malformedSubject,
+          ],
+        }).success,
+      ).toBe(false);
+      expect(
+        analysisSnapshotSchema.safeParse({
+          ...snapshot,
+          workflow_entries: [
+            {
+              ...entry,
+              execution: {
+                ...entry.execution,
+                analysis_profile: snapshot.binding.analysis_profile,
+                subject: malformedSubject,
+              },
             },
-          },
-        ],
-      }).success,
-    ).toBe(false);
-  });
+          ],
+        }).success,
+      ).toBe(false);
+    },
+  );
 });
 
 describe("analysis snapshot contract", () => {
@@ -234,6 +243,7 @@ describe("analysis snapshot contract", () => {
               raw_result: null,
               provider: binding.provider,
               limitations: [],
+              relationship_coverage: null,
               locations: [],
               subject: target,
             },
@@ -262,6 +272,7 @@ describe("analysis snapshot contract", () => {
         raw_result: null,
         provider: binding.provider,
         limitations: [],
+        relationship_coverage: null,
         locations: [],
         subject: {
           path: "a\u0000b",
@@ -293,6 +304,7 @@ describe("analysis snapshot contract", () => {
         raw_result: null,
         provider: binding.provider,
         limitations: [],
+        relationship_coverage: null,
         locations: [],
         subject: null,
       },
@@ -410,6 +422,51 @@ describe("analysis snapshot canonical ordering and scope", () => {
   });
 });
 
+it("does not select arbitrary provenance when multiple authenticated records match one replay entry", () => {
+  const { current, snapshot } = snapshotWithHistoricalEvidence();
+  const source = snapshot.evidence_bundle.records.find(
+    (record) => record.operation === "unprofiled_query",
+  )!;
+  const alternative = createEvidence(
+    ANALYSIS_SNAPSHOT_TARGET,
+    ANALYSIS_SNAPSHOT_PROVIDER,
+    {
+      operation: current.operation,
+      parameters: current.parameters,
+      result: current.normalized_result,
+      analysisProfile: ANALYSIS_SNAPSHOT_PROFILE,
+      evidenceLinks: [source.evidence_id],
+    },
+  );
+  expect(alternative.evidence_id).not.toBe(current.evidence_id);
+  const ambiguous = parseAnalysisSnapshot({
+    ...snapshot,
+    evidence_bundle: createEvidenceBundle([
+      ...snapshot.evidence_bundle.records,
+      alternative,
+    ]),
+  });
+  expect(ambiguous.entries).toEqual(snapshot.entries);
+  const reversedInsertion = parseAnalysisSnapshot({
+    ...ambiguous,
+    evidence_bundle: createEvidenceBundle(
+      [...ambiguous.evidence_bundle.records].reverse(),
+    ),
+  });
+  expect(reversedInsertion).toEqual(ambiguous);
+  for (const candidate of [ambiguous, reversedInsertion])
+    expect(
+      snapshotEvidenceForQuery(candidate, {
+        target: ANALYSIS_SNAPSHOT_TARGET,
+        bindingProfile: ANALYSIS_SNAPSHOT_PROFILE,
+        operation: current.operation,
+        parameters: current.parameters,
+        provider: ANALYSIS_SNAPSHOT_PROVIDER,
+        evidenceProfile: ANALYSIS_SNAPSHOT_PROFILE,
+      }),
+    ).toBeUndefined();
+});
+
 describe("analysis snapshot Evidence binding", () => {
   it("finds only Evidence committed to the exact binding and profile", () => {
     const { current, snapshot } = snapshotWithHistoricalEvidence();
@@ -456,6 +513,7 @@ describe("analysis snapshot Evidence binding", () => {
         raw_result: rawResult,
         provider: binding.provider,
         limitations: ["fixture limitation"],
+        relationship_coverage: null,
         locations: [{ kind: "address" as const, address: "0x1000" }],
         subject,
       },
@@ -480,10 +538,20 @@ describe("analysis snapshot Evidence binding", () => {
       workflow_entries: [],
       evidence_bundle: createEvidenceBundle([evidence]),
     };
-    const parsedLegacySnapshot = parseAnalysisSnapshot(snapshot);
+    const parsedSnapshot = parseAnalysisSnapshot(snapshot);
     expect(
-      parsedLegacySnapshot.entries[0]?.execution.relationship_coverage,
+      parsedSnapshot.entries[0]?.execution.relationship_coverage,
     ).toBeNull();
+
+    const missingCoverage = structuredClone(snapshot);
+    const missingCoverageEntry = missingCoverage.entries[0];
+    if (missingCoverageEntry === undefined)
+      throw new Error("snapshot entry missing");
+    Reflect.deleteProperty(
+      missingCoverageEntry.execution,
+      "relationship_coverage",
+    );
+    expect(() => parseAnalysisSnapshot(missingCoverage)).toThrow();
 
     expect(() =>
       parseAnalysisSnapshot({

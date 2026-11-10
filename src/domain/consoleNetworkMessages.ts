@@ -1,7 +1,7 @@
 // MMA FILE SUMMARY
 // Purpose: Defines derived plaintext messages and bounded TCP coverage with exact packet provenance.
 // Public interface: Message/stream schemas, inferred types and interpretation resource limits.
-// Invariants: Message completeness is distinct from session completeness; unique packet IDs exactly match byte-source membership.
+// Invariants: Message completeness is distinct from session completeness; sources preserve capture interface, VLAN identity and exact byte membership.
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { ConsoleNetworkPacket } from "./consoleNetworkCapture.js";
@@ -20,6 +20,33 @@ const endpoint = z.strictObject({
   address: z.string(),
   port: count.max(65535),
 });
+export const consoleVlanTagsSchema = z
+  .array(
+    z.strictObject({
+      protocol: z.union([
+        z.literal(0x8100),
+        z.literal(0x88a8),
+        z.literal(0x9100),
+      ]),
+      id: count.max(4095),
+      priority: count.max(7),
+      drop_eligible: z.boolean(),
+    }),
+  )
+  .nullable()
+  .optional()
+  .describe(
+    "Ethernet VLAN tags in outer-to-inner order; [] is observed untagged Ethernet, null is unavailable, and omission preserves older reports without VLAN metadata.",
+  );
+
+/** Priority and drop eligibility describe a packet, while ordered TPID/VID pairs identify its VLAN. */
+export const consoleVlanIdentity = (
+  tags: z.output<typeof consoleVlanTagsSchema>,
+): string | undefined =>
+  JSON.stringify(
+    tags === null ? null : tags?.map(({ protocol, id }) => [protocol, id]),
+  );
+
 export const consoleMessageFlowSchema = z.strictObject({
   transport: z.enum(["tcp", "udp"]),
   source: endpoint,
@@ -162,6 +189,7 @@ function validMessageSource(
     cursor: number;
     message: ConsoleNetworkMessage;
     artifactBytes: number;
+    vlanIdentity: string | undefined;
   },
 ): packet is PacketPayloadCoordinates {
   return (
@@ -170,6 +198,7 @@ function validMessageSource(
     packet?.payload_offset != null &&
     packet.payload_bytes !== null &&
     packet.interface_id === position.message.interface_id &&
+    consoleVlanIdentity(packet.vlan_tags) === position.vlanIdentity &&
     JSON.stringify(packet.flow) === JSON.stringify(position.message.flow) &&
     range.file_offset >= packet.payload_offset &&
     range.file_offset + range.bytes <=
@@ -187,6 +216,12 @@ function validateMessageRanges(
     rawAvailable = true;
   const hash = createHash("sha256"),
     used = new Set<string>();
+  const firstPacketId = message.sources[0]?.packet_id;
+  const vlanIdentity = consoleVlanIdentity(
+    firstPacketId === undefined
+      ? undefined
+      : state.packets.get(firstPacketId)?.vlan_tags,
+  );
   for (const [sourceIndex, source] of message.sources.entries()) {
     const packet = state.packets.get(source.packet_id);
     used.add(source.packet_id);
@@ -195,11 +230,12 @@ function validateMessageRanges(
         cursor,
         message,
         artifactBytes: state.artifactBytes,
+        vlanIdentity,
       })
     ) {
       issue(
         ["messages", index, "sources", sourceIndex],
-        "Message sources must cover consecutive bytes inside selected packet payloads.",
+        "Message sources must cover consecutive bytes inside selected packet payloads on the same VLAN.",
       );
       rawAvailable = false;
     } else if (packet.payload_hex === null) rawAvailable = false;
@@ -269,6 +305,12 @@ function validateStreamSources(
   issue: MessageIssue,
 ): void {
   for (const [index, stream] of streams.entries()) {
+    const firstPacketId = stream.packet_ids[0];
+    const vlanIdentity = consoleVlanIdentity(
+      firstPacketId === undefined
+        ? undefined
+        : packets.get(firstPacketId)?.vlan_tags,
+    );
     if (
       stream.flow.transport !== "tcp" ||
       stream.packet_ids.some((id) => {
@@ -276,13 +318,14 @@ function validateStreamSources(
         return (
           packet === undefined ||
           packet.interface_id !== stream.interface_id ||
+          consoleVlanIdentity(packet.vlan_tags) !== vlanIdentity ||
           JSON.stringify(packet.flow) !== JSON.stringify(stream.flow)
         );
       })
     )
       issue(
         ["tcp_streams", index, "packet_ids"],
-        "TCP coverage must refer to selected packets on its declared interface and direction.",
+        "TCP coverage must refer to selected packets on its declared interface, direction and VLAN.",
       );
   }
 }

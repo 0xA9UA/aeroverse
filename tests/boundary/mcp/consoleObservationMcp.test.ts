@@ -1,7 +1,7 @@
 // MMA FILE SUMMARY
-// Purpose: Verifies console schemas, target-free MCP execution, target-content framing and Evidence linkage.
-// Collaborators: Real packet decoder, supplied debugger port and shared server composition.
-// Invariants: The debugger fixture tests contracts only; no hardware or game observation is claimed.
+// Purpose: Verifies console schemas, production stdio execution, partial results and Evidence linkage.
+// Collaborators: Real packet decoder, simulated RSP socket, supplied partial-result port and server composition.
+// Invariants: Synthetic debugger peers establish transport integration, not hardware or game compatibility.
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { expect, it, onTestFinished } from "vitest";
@@ -12,7 +12,10 @@ import {
 import { ConsoleNetworkCaptureAdapter } from "../../../src/console/network/ConsoleNetworkCaptureAdapter.js";
 import { CONSOLE_OBSERVATION_TOOL_CONTRACTS } from "../../../src/contracts/consoleObservationToolContracts.js";
 import { toolContract } from "../../../src/contracts/toolContracts.js";
-import { observeConsoleDebuggerInputSchema } from "../../../src/domain/consoleDebugger.js";
+import {
+  observeConsoleDebuggerInputSchema,
+  consoleDebuggerObservationSchema,
+} from "../../../src/domain/consoleDebugger.js";
 import { consoleNetworkCaptureSchema } from "../../../src/domain/consoleNetworkCapture.js";
 import { consoleCorrelationSchema } from "../../../src/domain/consoleObservation.js";
 import { parseEvidence } from "../../../src/domain/evidence.js";
@@ -24,6 +27,8 @@ import {
   writeConsoleCaptureFixture,
 } from "../../fixtures/consoleObservation.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
+import { connectLocalToolsMcp } from "../../fixtures/localToolsMcp.js";
+import { input, ppcFixture, stub } from "../../fixtures/consoleDebugger.js";
 
 const consoleFixture = async () => {
   const root = await createTestTempDirectory("rea-console-mcp-");
@@ -259,3 +264,112 @@ it("links matching imported reports and preserves altered source claims as unlin
   );
   expect(wrongSource.evidence_links).toEqual([]);
 });
+
+it("runs all three console tools through the production stdio server and a simulated RSP socket", async () => {
+  const root = await createTestTempDirectory("rea-console-stdio-");
+  const capturePath = await writeConsoleCaptureFixture(root);
+  const remote = await stub(ppcFixture({ memory: "ping" }));
+  const mcp = await connectLocalToolsMcp();
+  const call = async (
+    name: ConsoleObservationOperation,
+    arguments_: Record<string, unknown>,
+  ) => {
+    const response = await mcp.call(name, arguments_);
+    expect(response.isError, JSON.stringify(response)).not.toBe(true);
+    expect(response._meta).toEqual({
+      provenance: { untrusted_content: true, source: "analysis_target" },
+    });
+    const evidence = parseEvidence(response.structuredContent);
+    expect(evidence.operation).toBe(name);
+    return evidence;
+  };
+  const capture = await call("inspect_console_network_capture", {
+    capture_path: capturePath,
+    include_payload: true,
+  });
+  const captureReport = consoleNetworkCaptureSchema.parse(
+    capture.normalized_result,
+  );
+  expect(captureReport.packets).toHaveLength(2);
+  expect(captureReport.packets[0]?.payload_hex).toBe(
+    Buffer.from("ping").toString("hex"),
+  );
+  expect(capture.subject?.local_path).toBe(capturePath);
+  expect(capture.subject?.digest.sha256).toBe(captureReport.artifact.sha256);
+  const observationInput = input(remote.endpoint, {
+    duration_ms: 5000,
+    command_timeout_ms: 1000,
+    max_stops: 2,
+    breakpoint_scope: "exclusive-session",
+    memory_policy: "bytes",
+    hooks: [
+      {
+        label: "synthetic_send",
+        kind: "network",
+        address: "0x80001000",
+        memory: [
+          {
+            label: "payload",
+            address_register: "r3",
+            length_register: "r4",
+            length: 4,
+          },
+        ],
+      },
+    ],
+  });
+  const observed = await call("observe_console_debugger", observationInput);
+  const observation = consoleDebuggerObservationSchema.parse(
+    observed.normalized_result,
+  );
+  expect(observed.parameters).toEqual(observationInput);
+  expect(observation.endpoint).toEqual(remote.endpoint);
+  expect(observation.target).toEqual(observationInput.target);
+  expect(observation.completion).toBe("completed");
+  expect(observation.stops[1]?.pc).toBe("0x80001000");
+  expect(observation.stops[1]?.memory[0]).toMatchObject({
+    bytes: 4,
+    sha256: captureReport.packets[0]?.payload_sha256,
+    truncated: false,
+    content_base64: Buffer.from("ping").toString("base64"),
+  });
+  expect(observation.cleanup).toMatchObject({
+    status: "complete",
+    remaining_breakpoints: [],
+    run_state: "halted-observed",
+  });
+  expect(remote.peers[0]?.commands).toContain("Z0,80001000,4");
+  expect(remote.peers[0]?.commands).toContain("z0,80001000,4");
+  await expect.poll(() => remote.peers[0]?.socket.destroyed).toBe(true);
+  const scenario = consoleCorrelationInput(captureReport.artifact.sha256);
+  const correlated = await call("correlate_console_observations", {
+    ...scenario,
+    target: { ...scenario.target, platform_id: observation.target.platform },
+    events: scenario.events.filter(({ kind }) => kind === "action"),
+    network_captures: [
+      {
+        clock_id: "fixture",
+        report: captureReport,
+        evidence_id: capture.evidence_id,
+      },
+    ],
+    debugger_observations: [
+      {
+        clock_id: "debugger-host",
+        report: observation,
+        evidence_id: observed.evidence_id,
+      },
+    ],
+  });
+  expect(correlated.evidence_links).toEqual([
+    capture.evidence_id,
+    observed.evidence_id,
+  ]);
+  const graph = consoleCorrelationSchema.parse(correlated.normalized_result);
+  expect(graph.timeline).toHaveLength(6);
+  expect(
+    graph.edges.some(({ relationship }) => relationship === "same-payload"),
+  ).toBe(true);
+  expect(graph.edges.every(({ causal_proof }) => !causal_proof)).toBe(true);
+  expect(graph.backend_contract.readiness).toBe("requirements-only");
+}, 30_000);

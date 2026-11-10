@@ -184,8 +184,23 @@ section[id] {
   display: none;
 }
 .language-picker summary::after {
-  content: "⌄";
+  content: "";
   flex-shrink: 0;
+  inline-size: 0.75rem;
+  block-size: 0.75rem;
+  background-color: currentColor;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='m2 4 4 4 4-4' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}
+.language-picker[open] summary::after {
+  transform: rotate(180deg);
+}
+@media (forced-colors: active) {
+  .language-picker summary::after {
+    /* Keep the mask visible with the user's high-contrast text color. */
+    forced-color-adjust: none;
+    background-color: CanvasText;
+  }
 }
 .language-picker nav {
   position: absolute;
@@ -228,11 +243,12 @@ section[id] {
   font-size: 0.9rem;
 }
 .header-inner {
+  width: min(1320px, calc(100% - 3.5rem));
   min-height: 88px;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 2rem;
+  gap: 1.5rem;
 }
 .brand {
   display: flex;
@@ -753,6 +769,85 @@ pre code {
   color: var(--muted);
   font-size: 0.875rem;
 }
+.contributors-section {
+  padding-block: 0 4rem;
+}
+.contributors-toolbar {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1rem 2rem;
+  margin-bottom: 1rem;
+}
+.contributors-toolbar h2 {
+  margin: 0;
+}
+.contributors-search {
+  display: grid;
+  gap: 0.35rem;
+  width: min(100%, 19rem);
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.contributors-search input {
+  min-width: 0;
+  width: 100%;
+  min-height: 44px;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--page);
+  color: var(--ink);
+}
+.contributors-search input::placeholder {
+  color: var(--muted);
+}
+.contributors-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(8.5rem, 100%), 1fr));
+  gap: 0.75rem;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+.contributors-grid li {
+  margin: 0;
+  min-width: 0;
+}
+.contributor-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: start;
+  gap: 0.7rem;
+  height: 100%;
+  padding: 1.25rem 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--ink);
+  text-decoration: none;
+  text-align: center;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+.contributor-card:hover {
+  background: var(--soft);
+  border-color: var(--accent);
+}
+.contributor-card img {
+  border-radius: 50%;
+  background: var(--soft);
+  object-fit: cover;
+}
+.contributor-card span {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.contributors-source {
+  margin-block: 1.5rem 0;
+}
+
 .article-layout {
   display: grid;
   grid-template-columns: 190px minmax(0, 1fr);
@@ -2462,9 +2557,6 @@ pre code {
   .home-reassurance {
     max-width: 600px;
   }
-  .brand-caption {
-    display: none;
-  }
   .feature-case {
     gap: 2.4rem;
   }
@@ -2526,24 +2618,18 @@ pre code {
   .container {
     width: calc(100% - 2.5rem);
   }
-  .header-inner {
-    min-height: 78px;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 0.55rem;
-    padding-block: 0.8rem;
-  }
   .navigation {
-    grid-row: 2;
-    grid-column: 1 / -1;
-    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 0.5rem 0.25rem;
+    gap: 0.5rem 0.8rem;
     font-size: 0.875rem;
   }
-  .header-social {
-    grid-row: 1;
-    grid-column: 2;
+  .navigation a {
+    min-width: 0;
+    min-height: 40px;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
   .hero {
     padding-block: 3.5rem 3rem;
@@ -2816,23 +2902,21 @@ html[dir="rtl"] .breadcrumb,
 html[dir="rtl"] .brand-name {
   unicode-bidi: isolate;
 }
-@media (min-width: 851px) and (max-width: 1250px) {
+@media (max-width: 1279px) {
   .brand-caption {
     display: none;
   }
 }
-@media (max-width: 850px) {
+@media (max-width: 1100px) {
   .header-inner {
     grid-template-columns: auto minmax(0, 1fr);
-  }
-  .brand-caption {
-    display: none;
+    row-gap: 0.65rem;
+    padding-block: 0.8rem;
   }
   .navigation {
     grid-column: 1 / -1;
     grid-row: 2;
     justify-content: flex-start;
-    padding-bottom: 0.8rem;
   }
   .header-social {
     grid-column: 2;
@@ -2840,9 +2924,6 @@ html[dir="rtl"] .brand-name {
     min-inline-size: 0;
     justify-content: flex-end;
     gap: 0.45rem;
-  }
-  .nav-github-count {
-    display: none;
   }
   .language-picker {
     position: static;
@@ -2852,8 +2933,18 @@ html[dir="rtl"] .brand-name {
     top: 4.3rem;
     width: auto;
   }
+}
+@media (max-width: 850px) {
+  .nav-github-count {
+    display: none;
+  }
   .explanatory-figure figcaption a {
     white-space: normal;
+  }
+}
+@media (max-width: 340px) {
+  .navigation {
+    column-gap: 0.6rem;
   }
 }
 @media (max-width: 400px) {
@@ -2868,7 +2959,7 @@ html[dir="rtl"] .brand-name {
   }
 }
 
-/* Select local fonts with the appropriate CJK glyph forms. */
+/* Select fonts with the appropriate CJK glyph forms. */
 :lang(ja) {
   --font-sans:
     var(--font-latin), "Hiragino Sans", "Hiragino Kaku Gothic ProN",
@@ -2895,11 +2986,11 @@ html[dir="rtl"] .brand-name {
 }
 :lang(ko) {
   --font-sans:
-    var(--font-latin), "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR",
-    "Noto Sans CJK KR", sans-serif;
+    "Noto Sans KR", "Noto Sans CJK KR", "Apple SD Gothic Neo", "Malgun Gothic",
+    var(--font-latin), sans-serif;
   --font-mono:
-    var(--font-code), "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR",
-    "Noto Sans CJK KR", monospace;
+    var(--font-code), "Noto Sans KR", "Noto Sans CJK KR", "Apple SD Gothic Neo",
+    "Malgun Gothic", monospace;
 }
 :lang(en) {
   --font-sans: var(--font-latin), sans-serif;

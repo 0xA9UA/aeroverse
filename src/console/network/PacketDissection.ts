@@ -15,6 +15,7 @@ type Facts = Pick<
   | "encryption"
   | "payload_state"
   | "limitations"
+  | "vlan_tags"
 >;
 export interface PacketDissection extends Facts {
   payload: Buffer | null;
@@ -28,6 +29,7 @@ export const dissectPacket = (record: CaptureRecord): PacketDissection => {
     network: null,
     flow: null,
     tcp: null,
+    vlan_tags: null,
     fragmentation: {
       state: "unknown",
       offset_bytes: null,
@@ -68,15 +70,24 @@ const decodeLink = (
         return null;
       }
       start = 14;
+      const tags = [];
       etherType = bytes.readUInt16BE(12);
       while ([0x8100, 0x88a8, 0x9100].includes(etherType)) {
         if (bytes.length < start + 4) {
           result.limitations.push("Ethernet VLAN header is incomplete.");
           return null;
         }
+        const control = bytes.readUInt16BE(start);
+        tags.push({
+          protocol: etherType as 0x8100 | 0x88a8 | 0x9100,
+          id: control & 0x0fff,
+          priority: control >>> 13,
+          drop_eligible: (control & 0x1000) !== 0,
+        });
         etherType = bytes.readUInt16BE(start + 2);
         start += 4;
       }
+      result.vlan_tags = tags;
       break;
     }
     case 101:

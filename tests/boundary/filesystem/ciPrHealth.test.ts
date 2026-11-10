@@ -406,10 +406,22 @@ it("public CLI uses only GET and produces a report from fixture GitHub responses
   const ghCalls = join(fixture.directory, "gh-calls.jsonl");
   const ghResponse = join(fixture.directory, "gh-response.json");
   const fakeGh = join(fixture.fakeBin, "gh");
+  const fixtureNow = Date.now();
   await writeFile(
     ghResponse,
     JSON.stringify([
-      [rawPull(51, { mergeable: true })],
+      [
+        rawPull(51, {
+          mergeable: true,
+          created_at: new Date(fixtureNow - 24 * 60 * 60 * 1_000).toISOString(),
+        }),
+        rawPull(52, {
+          mergeable: true,
+          created_at: new Date(
+            fixtureNow - 31 * 24 * 60 * 60 * 1_000,
+          ).toISOString(),
+        }),
+      ],
       { total_count: 0, workflow_runs: [] },
     ]),
   );
@@ -445,6 +457,9 @@ it("public CLI uses only GET and produces a report from fixture GitHub responses
   const report = JSON.parse(
     await readFile(join(outputDirectory, "report.json"), "utf8"),
   );
+  expect(
+    report.pullRequests.map((pull: { number: number }) => pull.number),
+  ).toEqual([51]);
   expect(report.pullRequests[0].ci.category).toBe("missing");
   await expect(
     readFile(join(outputDirectory, "summary.md"), "utf8"),

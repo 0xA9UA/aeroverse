@@ -1,6 +1,6 @@
 // MMA FILE SUMMARY
 // Purpose: Verifies bounded HTTP/TCP interpretation through the real retained PCAP adapter.
-// Responsibilities: Check framing, source bytes, gaps/conflicts, SYN/SYN-ACK generations and incomplete FIN boundaries.
+// Responsibilities: Check VLAN isolation, framing, source bytes, gaps/conflicts, SYN/SYN-ACK generations and incomplete FIN boundaries.
 // Invariants: Synthetic standards-shaped traffic is not proof of game/backend compatibility.
 import { createHash } from "node:crypto";
 import { writeFile } from "node:fs/promises";
@@ -56,6 +56,19 @@ const frame = (segment: Segment): Buffer => {
   return bytes;
 };
 const inspect = (segments: Segment[]) => inspectFrames(segments.map(frame));
+const taggedFrame = (
+  segment: Segment,
+  tags: readonly [number, number][],
+): Buffer => {
+  const bytes = frame(segment);
+  const headers = tags.map(([protocol, control]) => {
+    const header = Buffer.alloc(4);
+    header.writeUInt16BE(protocol);
+    header.writeUInt16BE(control, 2);
+    return header;
+  });
+  return Buffer.concat([bytes.subarray(0, 12), ...headers, bytes.subarray(12)]);
+};
 const inspectFrames = async (
   frames: Buffer[],
   includePayload = false,
@@ -154,6 +167,141 @@ it("reorders captured segments by exact sequence including 32-bit wrap", async (
     http: { method: "POST" },
   });
   expect(report.tcp_streams[0]?.first_sequence).toBe(initial + 1);
+});
+
+it.each([
+  { name: "different VLANs", first: [[0x8100, 42]], second: [[0x8100, 43]] },
+  {
+    name: "different outer QinQ VLANs",
+    first: [
+      [0x88a8, 42],
+      [0x8100, 7],
+    ],
+    second: [
+      [0x88a8, 43],
+      [0x8100, 7],
+    ],
+  },
+  {
+    name: "different inner QinQ VLANs",
+    first: [
+      [0x88a8, 42],
+      [0x8100, 7],
+    ],
+    second: [
+      [0x88a8, 42],
+      [0x8100, 8],
+    ],
+  },
+  {
+    name: "different tag protocols",
+    first: [[0x8100, 42]],
+    second: [[0x88a8, 42]],
+  },
+  { name: "tagged and untagged Ethernet", first: [[0x8100, 42]], second: [] },
+] satisfies {
+  name: string;
+  first: [number, number][];
+  second: [number, number][];
+}[])(
+  "keeps identical TCP endpoints separate across $name",
+  async ({ first, second }) => {
+    const bodyStart = request.indexOf("\r\n\r\n") + 4;
+    const report = await inspectFrames([
+      taggedFrame(
+        { sequence: 100, payload: request.subarray(0, bodyStart) },
+        first,
+      ),
+      taggedFrame(
+        { sequence: 100 + bodyStart, payload: request.subarray(bodyStart) },
+        second,
+      ),
+    ]);
+    expect(report.tcp_streams).toHaveLength(2);
+    expect(
+      new Set(report.tcp_streams.map(({ connection_id }) => connection_id))
+        .size,
+    ).toBe(2);
+    expect(report.tcp_streams.map(({ packet_ids }) => packet_ids)).toEqual(
+      report.packets.map(({ id }) => [id]),
+    );
+    expect(report.messages).toHaveLength(1);
+    expect(report.messages[0]).toMatchObject({
+      status: "incomplete",
+      packet_ids: [report.packets[0]!.id],
+      http: { body: { bytes: 0, complete: false } },
+    });
+  },
+);
+
+it("assembles one QinQ stream despite priority and drop-eligibility changes, retaining each packet's tags", async () => {
+  const bodyStart = request.indexOf("\r\n\r\n") + 4;
+  const report = await inspectFrames([
+    taggedFrame({ sequence: 100, payload: request.subarray(0, bodyStart) }, [
+      [0x88a8, 42],
+      [0x8100, 7],
+    ]),
+    taggedFrame(
+      { sequence: 100 + bodyStart, payload: request.subarray(bodyStart) },
+      [
+        [0x88a8, 0xb02a],
+        [0x8100, 0x4007],
+      ],
+    ),
+  ]);
+  expect(report.packets.map(({ vlan_tags }) => vlan_tags)).toEqual([
+    [
+      { protocol: 0x88a8, id: 42, priority: 0, drop_eligible: false },
+      { protocol: 0x8100, id: 7, priority: 0, drop_eligible: false },
+    ],
+    [
+      { protocol: 0x88a8, id: 42, priority: 5, drop_eligible: true },
+      { protocol: 0x8100, id: 7, priority: 2, drop_eligible: false },
+    ],
+  ]);
+  expect(report.tcp_streams).toHaveLength(1);
+  expect(report.messages[0]).toMatchObject({
+    status: "complete",
+    packet_ids: report.packets.map(({ id }) => id),
+    wire_sha256: createHash("sha256").update(request).digest("hex"),
+  });
+  const altered = structuredClone(report);
+  altered.packets[1]!.vlan_tags![0]!.id = 43;
+  const invalid = consoleNetworkCaptureSchema.safeParse(altered);
+  expect(invalid.success).toBe(false);
+  if (!invalid.success) {
+    expect(
+      invalid.error.issues.some(({ path }) => path[0] === "messages"),
+    ).toBe(true);
+    expect(
+      invalid.error.issues.some(({ path }) => path[0] === "tcp_streams"),
+    ).toBe(true);
+  }
+  const historical = structuredClone(report);
+  for (const packet of historical.packets) delete packet.vlan_tags;
+  expect(consoleNetworkCaptureSchema.parse(historical)).toEqual(historical);
+  const incompleteMetadata = structuredClone(report);
+  delete incompleteMetadata.packets[0]!.vlan_tags;
+  expect(
+    consoleNetworkCaptureSchema.safeParse(incompleteMetadata).success,
+  ).toBe(false);
+});
+
+it("keeps a truncated VLAN stack unknown and prevents transport interpretation", async () => {
+  const bytes = taggedFrame({ sequence: 100, payload: request }, [
+    [0x88a8, 42],
+    [0x8100, 7],
+  ]);
+  const report = await inspectFrames([bytes.subarray(0, 19)], false, [
+    bytes.length,
+  ]);
+  expect(report.packets[0]).toMatchObject({
+    vlan_tags: null,
+    flow: null,
+    tcp: null,
+  });
+  expect(report.tcp_streams).toEqual([]);
+  expect(report.messages).toEqual([]);
 });
 
 it("keeps missing body bytes incomplete and never joins HTTP across a sequence gap", async () => {

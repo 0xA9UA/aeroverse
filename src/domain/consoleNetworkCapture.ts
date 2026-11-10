@@ -10,6 +10,7 @@ import {
   CONSOLE_MESSAGE_LIMITS,
   consoleNetworkMessageSchema,
   consoleTcpStreamSchema,
+  consoleVlanTagsSchema,
   validateConsoleMessageSources,
 } from "./consoleNetworkMessages.js";
 
@@ -74,6 +75,7 @@ const consoleNetworkPacketValueSchema = z.strictObject({
   captured_length: count,
   original_length: count,
   interface_id: z.string(),
+  vlan_tags: consoleVlanTagsSchema,
   link_type: count,
   snap_length: count,
   network: z

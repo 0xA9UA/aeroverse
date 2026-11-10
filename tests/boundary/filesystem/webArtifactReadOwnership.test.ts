@@ -1,4 +1,4 @@
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
 
@@ -33,18 +33,21 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 });
 
 import { WebModuleTraceService } from "../../../src/application/WebModuleTraceService.js";
+import { finishAnalysisCommand } from "../../../src/cli/finishAnalysisCommand.js";
 import { LocalWebModuleArtifacts } from "../../../src/browser/modules/WebModuleArtifacts.js";
+import { ProviderCleanupError } from "../../../src/domain/providerCleanupError.js";
+import { AnalysisCancelledError } from "../../../src/domain/analysisErrorCore.js";
+import { projectAnalysisError } from "../../../src/domain/analysisErrorProjection.js";
 import { webModuleArtifactsFixture } from "../../fixtures/webModuleTrace.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 
 it("retains cancelled source read ownership until service close retries it", async () => {
   const root = await createTestTempDirectory("rea-web-artifact-read-owner-");
-  onTestFinished(async () => {
+  onTestFinished(() => {
     injected.sourcePath = undefined;
     injected.abortController = undefined;
     injected.failClose = false;
     injected.closeAttempts = 0;
-    await rm(root, { recursive: true, force: true });
   });
   const source = 'import "./dep.js";';
   const fixture = webModuleArtifactsFixture(source);
@@ -82,15 +85,75 @@ it("retains cancelled source read ownership until service close retries it", asy
   expect(blocked.error.cleanupIncomplete).toBe(true);
   expect(injected.closeAttempts).toBe(2);
 
-  await expect(service.close()).rejects.toThrow(
-    "Web module trace cleanup failed",
-  );
+  let cleanupFailure: unknown;
+  try {
+    await service.close();
+  } catch (cause) {
+    cleanupFailure = cause;
+  }
+  expect(cleanupFailure).toBeInstanceOf(ProviderCleanupError);
+  expect(cleanupFailure).toMatchObject({
+    operation: "trace_web_module_imports",
+    cleanupResources: [sourcePath],
+    diagnostics: { reason: expect.stringContaining("fixture close refusal") },
+  });
+  expect((cleanupFailure as ProviderCleanupError).cause).toBeInstanceOf(Error);
   expect(resolver.close).toHaveBeenCalledTimes(1);
   expect(injected.closeAttempts).toBe(3);
+
+  const finalized = await finishAnalysisCommand(
+    () => service.trace(input),
+    service,
+    "web-module-artifacts",
+    "trace_web_module_imports",
+    new AbortController().signal,
+  );
+  expect(finalized).toMatchObject({
+    code: "cleanup_incomplete",
+    details: { resources: [sourcePath] },
+  });
+  expect(resolver.close).toHaveBeenCalledTimes(2);
 
   injected.failClose = false;
   const attemptsBeforeRetry = injected.closeAttempts;
   await service.close();
   expect(injected.closeAttempts).toBeGreaterThan(attemptsBeforeRetry);
-  expect(resolver.close).toHaveBeenCalledTimes(2);
+  expect(resolver.close).toHaveBeenCalledTimes(3);
+});
+
+it("preserves both web cleanup owners' resources, diagnostics and recovery actions", async () => {
+  const artifacts = new ProviderCleanupError(
+    "web-artifacts",
+    ["artifact-root", "shared-resource"],
+    { reason: "artifact cleanup denied" },
+    { remediationAction: "Release the retained artifact lease." },
+  );
+  const resolver = new AnalysisCancelledError("web-resolution", {
+    cleanup: {
+      reason: "resolver shutdown unconfirmed",
+      resources: ["resolver-root", "shared-resource"],
+    },
+  });
+  const service = new WebModuleTraceService(
+    {
+      load: vi.fn(),
+      close: async () => {
+        throw artifacts;
+      },
+    },
+    {
+      resolve: vi.fn(),
+      close: async () => {
+        throw resolver;
+      },
+    },
+  );
+  const projected = [artifacts, resolver].map(projectAnalysisError);
+  await expect(service.close()).rejects.toMatchObject({
+    cleanupResources: ["artifact-root", "shared-resource", "resolver-root"],
+    diagnostics: { failures: projected },
+    remediationAction: projected
+      .map(({ remediation }) => remediation.action)
+      .join("; "),
+  });
 });
