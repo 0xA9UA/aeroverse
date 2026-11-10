@@ -23,7 +23,11 @@ func fixture(
   return bytes
 }
 
-func malformedObservation(_ bytes: [UInt8], pointerSize: Int = 8) throws -> Any {
+func malformedObservation(
+  _ bytes: [UInt8],
+  pointerSize: Int = 8,
+  flags: UInt32? = 0x0400_0800
+) throws -> Any {
   do {
     _ = try parseProcessEnvironment(in: bytes, pointerSize: pointerSize)
     fatalError("Expected a malformed fixture")
@@ -31,7 +35,7 @@ func malformedObservation(_ bytes: [UInt8], pointerSize: Int = 8) throws -> Any 
     let observation = processRunTokenObservation(
       pid: 1,
       parse: .failure(failure),
-      codeSigningFlags: { 0x0400_0800 }
+      codeSigningFlags: { flags }
     )
     return try JSONSerialization.jsonObject(with: JSONEncoder().encode(observation))
   }
@@ -210,8 +214,17 @@ struct ProcessRunTokenParserProbe {
     )
     var invalidPadding = privateFixture
     invalidPadding[24] = 1
+    // Synthetic bytes reproduce the CI guard and scalar facts, not captured argv.
+    let syntheticPath = Array(("/" + String(repeating: "p", count: 106)).utf8) + [0]
+    var observedPaddingShape = withUnsafeBytes(of: Int32(1).littleEndian, Array.init)
+    observedPaddingShape.append(contentsOf: syntheticPath + syntheticPath + [0])
 
     let result: [String: Any] = [
+      "restrictedPaddingProjection": [
+        try malformedObservation(observedPaddingShape, flags: 637618689),
+        try malformedObservation(observedPaddingShape, flags: 0),
+        try malformedObservation(observedPaddingShape, flags: nil),
+      ],
       "malformedProcargs": [
         try malformedObservation(truncatedArgv),
         try malformedObservation(negativeArgc),

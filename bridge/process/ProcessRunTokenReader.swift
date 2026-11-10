@@ -255,6 +255,13 @@ func processRunTokenObservation(
       return unavailable(pid: pid, reason: "apple_vector_unavailable")
     case .invalidBuffer(var diagnostic):
       diagnostic.code_signing_flags = codeSigningFlags()
+      // XNU withholds restricted environments from KERN_PROCARGS2. A path-padding
+      // rejection cannot recover that environment; retain the parser facts and
+      // classify only this observed restricted failure, without reinterpreting bytes.
+      if diagnostic.stage == "path_padding",
+         let flags = diagnostic.code_signing_flags, (flags & csRestrict) != 0 {
+        return unavailable(pid: pid, reason: "restricted_process_environment_withheld", diagnostic: diagnostic)
+      }
       return unavailable(pid: pid, reason: "malformed_procargs", diagnostic: diagnostic)
     }
   }

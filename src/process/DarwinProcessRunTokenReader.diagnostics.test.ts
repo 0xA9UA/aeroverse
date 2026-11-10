@@ -1,6 +1,6 @@
 import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import {
   verifyNoTokenOwnedProcesses,
   type ProcessOwnershipHost,
@@ -8,7 +8,13 @@ import {
 } from "./ProcessOwnership.js";
 import { ProcessOwnershipEvidenceOwner } from "./ProcessOwnershipEvidence.js";
 
-const helper = vi.hoisted(() => ({ diagnostic: undefined as unknown }));
+const helper = vi.hoisted(() => ({
+  diagnostic: undefined as unknown,
+  reason: "malformed_procargs",
+}));
+beforeEach(() => {
+  helper.reason = "malformed_procargs";
+});
 vi.mock("./ExecFileOutput.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("./ExecFileOutput.js")>();
   return {
@@ -25,7 +31,7 @@ vi.mock("./ExecFileOutput.js", async (importOriginal) => {
             {
               pid: 900,
               state: "unavailable",
-              reason: "malformed_procargs",
+              reason: helper.reason,
               diagnostic: helper.diagnostic,
             },
           ],
@@ -62,6 +68,73 @@ const createReader = () =>
     },
     environment: {},
   });
+
+it.each([false, true])(
+  "keeps restricted padding evidence scoped to process relations (related: %s)",
+  async (related) => {
+    const observedDiagnostic: ProcessRunTokenReadDiagnostic = {
+      stage: "path_padding",
+      buffer_bytes: 221,
+      argument_count: 1,
+      offset: 112,
+      pointer_size: 8,
+      code_signing_flags: 637618689,
+    };
+    helper.reason = "restricted_process_environment_withheld";
+    helper.diagnostic = observedDiagnostic;
+    const candidate = { ...row, parentPid: related ? 100 : 1 };
+    const reader = createReader();
+    const signalGroup = vi.fn();
+    try {
+      const tokens = await reader.read([candidate]);
+      const host: ProcessOwnershipHost = {
+        platform: "darwin",
+        listProcesses: async () => [candidate],
+        environment: async () => ({}),
+        runTokens: async () => tokens,
+        processIdentities: async () =>
+          new Map([
+            [
+              candidate.pid,
+              {
+                state: "readable",
+                identity: "start:900",
+                effectiveUid: process.getuid?.() ?? 0,
+                lifecycle: { state: "observed", lifecycle: "non-zombie" },
+                relation: {
+                  state: "observed",
+                  parentPid: candidate.parentPid,
+                  processGroupId: 900,
+                },
+              },
+            ],
+          ]),
+        signalGroup,
+      };
+      const result = await verifyNoTokenOwnedProcesses("run-token", host, [], {
+        leaderPid: 100,
+        processGroupId: 100,
+        evidenceOwner: new ProcessOwnershipEvidenceOwner(),
+      });
+      const evidence = {
+        pid: 900,
+        diagnostic: helper.reason,
+        tokenReadDiagnostic: observedDiagnostic,
+      };
+      expect(result).toMatchObject(
+        related
+          ? {
+              cleaned: false,
+              failures: [{ ...evidence, reason: "environment-unreadable" }],
+            }
+          : { cleaned: true, signaled: false, unverified: [evidence] },
+      );
+      expect(signalGroup).not.toHaveBeenCalled();
+    } finally {
+      await reader.close();
+    }
+  },
+);
 
 it("retains native numeric diagnostics through a failing ownership sweep without changing classification", async () => {
   helper.diagnostic = diagnostic;

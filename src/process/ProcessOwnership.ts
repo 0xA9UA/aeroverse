@@ -253,6 +253,7 @@ interface ProcessOwnershipValidationFailure {
 export interface OwnershipSweepUnverifiedProcess {
   readonly pid: number;
   readonly diagnostic: string;
+  readonly tokenReadDiagnostic?: ProcessRunTokenReadDiagnostic;
 }
 
 /** Capture-owned process structures used to classify sweep candidates. */
@@ -1588,6 +1589,9 @@ const scanTokenOwnedProcesses = async (
     unverified.push({
       pid: candidate.process.pid,
       diagnostic: candidate.diagnostic,
+      ...(candidate.tokenReadDiagnostic === undefined
+        ? {}
+        : { tokenReadDiagnostic: candidate.tokenReadDiagnostic }),
     });
   }
   return { owned, failures, unverified, identities: ownedIdentities };
@@ -1759,6 +1763,9 @@ const scanWithOwnershipEvidence = async (
       unverified.push({
         pid: fact.process.pid,
         diagnostic: fact.token.reason,
+        ...(fact.token.diagnostic === undefined
+          ? {}
+          : { tokenReadDiagnostic: fact.token.diagnostic }),
       });
       continue;
     }

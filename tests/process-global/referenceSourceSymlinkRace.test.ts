@@ -57,6 +57,7 @@ import {
   readFile,
   rename,
   unlink,
+  utimes,
   writeFile,
   symlink,
 } from "node:fs/promises";
@@ -164,6 +165,9 @@ it.skipIf(process.platform === "win32").each(["contents", "root"] as const)(
     await mkdir(root);
     const source = join(root, "source.txt");
     await writeFile(source, "already observed source");
+    // A rename can share the creation's filesystem timestamp tick. Give the
+    // observed directory an earlier mtime so the real mutation is detectable.
+    await utimes(root, new Date(0), new Date(0));
     race.directory = root;
     race.afterDirectoryClose = () =>
       changed === "contents"

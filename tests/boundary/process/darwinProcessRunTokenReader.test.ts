@@ -1189,60 +1189,60 @@ it.skipIf(!onDarwin)(
         timeout: 10_000,
       });
       expect(JSON.parse(stdout)).toEqual({
+        restrictedPaddingProjection: [637618689, 0, undefined].map((flags) => ({
+          pid: 1,
+          state: "unavailable",
+          reason:
+            flags === 637618689
+              ? "restricted_process_environment_withheld"
+              : "malformed_procargs",
+          diagnostic: {
+            stage: "path_padding",
+            buffer_bytes: 221,
+            argument_count: 1,
+            offset: 112,
+            pointer_size: 8,
+            ...(flags === undefined ? {} : { code_signing_flags: flags }),
+          },
+        })),
         malformedProcargs: [
           {
-            pid: 1,
-            state: "unavailable",
-            reason: "malformed_procargs",
-            diagnostic: {
-              stage: "argument",
-              buffer_bytes: 82,
-              argument_count: 2,
-              offset: 48,
-              pointer_size: 8,
-              code_signing_flags: 0x04000800,
-            },
+            stage: "argument",
+            buffer_bytes: 82,
+            argument_count: 2,
+            offset: 48,
+            pointer_size: 8,
           },
           {
-            pid: 1,
-            state: "unavailable",
-            reason: "malformed_procargs",
-            diagnostic: {
-              stage: "argc",
-              buffer_bytes: 4,
-              argument_count: -1,
-              offset: 4,
-              pointer_size: 8,
-              code_signing_flags: 0x04000800,
-            },
+            stage: "argc",
+            buffer_bytes: 4,
+            argument_count: -1,
+            offset: 4,
+            pointer_size: 8,
           },
           {
-            pid: 1,
-            state: "unavailable",
-            reason: "malformed_procargs",
-            diagnostic: {
-              stage: "pointer_size",
-              buffer_bytes: 93,
-              argument_count: 1,
-              offset: 24,
-              pointer_size: -1,
-              code_signing_flags: 0x04000800,
-            },
+            stage: "pointer_size",
+            buffer_bytes: 93,
+            argument_count: 1,
+            offset: 24,
+            pointer_size: -1,
           },
           {
-            pid: 1,
-            state: "unavailable",
-            reason: "malformed_procargs",
-            diagnostic: {
-              stage: "path_padding",
-              buffer_bytes: 93,
-              argument_count: 1,
-              offset: 24,
-              pointer_size: 8,
-              code_signing_flags: 0x04000800,
-            },
+            stage: "path_padding",
+            buffer_bytes: 93,
+            argument_count: 1,
+            offset: 24,
+            pointer_size: 8,
           },
-        ],
+        ].map((diagnostic) => ({
+          pid: 1,
+          state: "unavailable",
+          reason:
+            diagnostic.stage === "path_padding"
+              ? "restricted_process_environment_withheld"
+              : "malformed_procargs",
+          diagnostic: { ...diagnostic, code_signing_flags: 0x04000800 },
+        })),
         argvDecoyIgnored: true,
         readableEnvironmentWithoutToken: {
           runId: null,
