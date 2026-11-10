@@ -35,7 +35,7 @@ const executeTimingReport = async (
       SOURCE_REQUIRED: "false",
       SOURCE_RESULT: "",
       CI_VERIFY_TEST_INVENTORY: "false",
-      CI_TEST_SELECTION: "",
+      CI_TEST_SELECTION_FILE: "",
       ...environment,
       GITHUB_STEP_SUMMARY: summary,
     },
@@ -57,6 +57,10 @@ const workflow = async () =>
   z
     .object({
       jobs: z.object({
+        changes: z.object({
+          outputs: z.record(z.string(), z.string()),
+          steps: stepsSchema,
+        }),
         test: z.object({ steps: stepsSchema }),
         build: z.object({ steps: stepsSchema }),
         docs: z.object({ steps: stepsSchema }),
@@ -75,6 +79,49 @@ const workflow = async () =>
         ),
       ),
     ).jobs;
+
+it("transports the exact selection plan as a required artifact without embedding diff paths in process inputs", async () => {
+  const jobs = await workflow();
+  const plan = jobs.changes.steps.find(
+    (step) => step.run === "node scripts/ci/plan.mjs",
+  );
+  const upload = jobs.changes.steps.find(
+    (step) => step.with?.name === "ci-test-selection-plan",
+  );
+  const download = jobs.test.steps.find(
+    (step) => step.with?.name === "ci-test-selection-plan",
+  );
+  const summary = jobs.test.steps.find(
+    (step) => step.run === "node scripts/ci/test-report.mjs",
+  );
+  expect(jobs.changes.outputs.test_selection).toBeUndefined();
+  expect(plan?.env?.CI_TEST_SELECTION_FILE).toBe(
+    ".cache/ci-test-selection/plan.json",
+  );
+  expect(upload?.uses).toMatch(/^actions\/upload-artifact@/);
+  expect(upload?.if).toBe("steps.plan.outputs.code == 'true'");
+  expect(upload?.with).toMatchObject({
+    path: plan?.env?.CI_TEST_SELECTION_FILE,
+    "include-hidden-files": true,
+    "if-no-files-found": "error",
+  });
+  expect(jobs.changes.steps.indexOf(upload!)).toBeGreaterThan(
+    jobs.changes.steps.indexOf(plan!),
+  );
+  expect(download?.uses).toMatch(/^actions\/download-artifact@/);
+  expect(download?.if).toBe(summary?.if);
+  expect(download?.with?.path).toBe(".cache/ci-test-selection");
+  expect(jobs.test.steps.indexOf(download!)).toBeLessThan(
+    jobs.test.steps.indexOf(summary!),
+  );
+  expect(summary?.env?.CI_TEST_SELECTION_FILE).toBe(
+    plan?.env?.CI_TEST_SELECTION_FILE,
+  );
+  for (const step of [...jobs.changes.steps, ...jobs.test.steps]) {
+    expect(step.env?.CI_TEST_SELECTION).toBeUndefined();
+    expect(step.run ?? "").not.toContain("outputs.test_selection");
+  }
+});
 
 it("merges available failed-shard diagnostics and skips unavailable shard reports", async () => {
   const steps = (await workflow()).test!.steps;
@@ -107,9 +154,10 @@ it("merges available failed-shard diagnostics and skips unavailable shard report
   const summary = steps.find((step) =>
     step.run?.includes("scripts/ci/test-report.mjs"),
   );
-  expect(summary?.env?.CI_TEST_SELECTION).toBe(
-    "${{ needs.changes.outputs.test_selection }}",
+  expect(summary?.env?.CI_TEST_SELECTION_FILE).toBe(
+    ".cache/ci-test-selection/plan.json",
   );
+  expect(summary?.env?.CI_TEST_SELECTION).toBeUndefined();
   const command = steps[gate]?.run;
   if (command === undefined) throw new Error("Missing shard result gate");
   for (const tier of ["fast", "full"]) {
@@ -618,15 +666,20 @@ it("records failed omissions from full reports without treating partial or unhan
   };
   const run = async (report: unknown, source = "failure") => {
     await writeFile(join(root, "test-timings.json"), JSON.stringify(report));
+    const selectionFile = join(root, "selection-plan.json");
+    await writeFile(
+      selectionFile,
+      JSON.stringify(
+        planTestSelection(["src/sqlite/Provider.ts"], "pull_request", "fast"),
+      ),
+    );
     await executeTimingReport(root, {
       SHARD_RESULT: "failure",
       SOURCE_REQUIRED: "true",
       SOURCE_RESULT: source,
       MERGE_RESULT: "failure",
       CI_VERIFY_TEST_INVENTORY: "true",
-      CI_TEST_SELECTION: JSON.stringify(
-        planTestSelection(["src/sqlite/Provider.ts"], "pull_request", "fast"),
-      ),
+      CI_TEST_SELECTION_FILE: selectionFile,
       GITHUB_SHA: "merge-sha",
       CI_PR_HEAD_SHA: "pr-head-sha",
     });
@@ -663,4 +716,72 @@ it("records failed omissions from full reports without treating partial or unhan
   await expect(
     readFile(join(root, ".cache/ci-test-history/test-results.json")),
   ).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("preserves selection plans larger than an exec environment entry and rejects missing or malformed plan files", async () => {
+  const root = await createTestTempDirectory("rea-ci-large-selection-");
+  await workflowGit(root, ["init"]);
+  await mkdir(join(root, "src"));
+  const testPath = "src/example.test.ts";
+  await writeFile(join(root, testPath), "// inventory fixture\n");
+  await workflowGit(root, ["add", "src"]);
+  const changedPaths = [
+    ...Array.from(
+      { length: 3000 },
+      (_, index) => `src/retained/input-${index}-${"x".repeat(40)}.ts`,
+    ),
+    'src/retained/quote " $() `literal`\nfixture.ts',
+  ];
+  const plan = planTestSelection(changedPaths, "pull_request", "fast");
+  const serialized = JSON.stringify(plan);
+  expect(Buffer.byteLength(serialized)).toBeGreaterThan(128 * 1024);
+  const planPath = join(root, "selection plan.json");
+  await writeFile(planPath, serialized);
+  await writeFile(
+    join(root, "test-timings.json"),
+    JSON.stringify({
+      version: 1,
+      success: true,
+      reason: "passed",
+      unhandledErrors: 0,
+      files: [{ name: testPath, durationMs: 1, state: "passed" }],
+    }),
+  );
+  const environment = {
+    CI_VERIFY_TEST_INVENTORY: "true",
+    CI_TEST_SELECTION_FILE: planPath,
+  };
+  await executeTimingReport(root, environment);
+  const reportPath = join(root, ".cache/ci-test-selection/report.json");
+  const historyPath = join(root, ".cache/ci-test-history/test-results.json");
+  const report = JSON.parse(await readFile(reportPath, "utf8")) as unknown;
+  expect(report).toMatchObject({
+    complete: true,
+    plan,
+    selected: [testPath],
+    omitted: [],
+  });
+  expect(JSON.parse(await readFile(historyPath, "utf8"))).toMatchObject({
+    success: true,
+  });
+  for (const invalid of [
+    undefined,
+    "{",
+    JSON.stringify({ version: 1, mode: "invalid" }),
+  ]) {
+    if (invalid === undefined) await rm(planPath);
+    else await writeFile(planPath, invalid);
+    // A failed handoff must remove stale successful report/history artifacts.
+    await writeFile(reportPath, "stale");
+    await writeFile(historyPath, "stale");
+    await expect(executeTimingReport(root, environment)).rejects.toMatchObject({
+      code: 1,
+    });
+    await expect(readFile(reportPath)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(readFile(historyPath)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  }
 });

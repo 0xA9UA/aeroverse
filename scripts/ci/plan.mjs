@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync } from "node:fs";
-import { matchesGlob } from "node:path";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname, matchesGlob } from "node:path";
 import { CI_FLAGS as flags, MANUAL_VERIFIERS, SCOPES } from "./scopes.mjs";
 import { planTestSelection } from "./test-selection.mjs";
 
@@ -323,6 +323,15 @@ const matrix = {
 };
 const testSelection = planTestSelection(files, event, tier);
 const plan = { ...selected, tier, matrix, files, reasons, testSelection };
+// Keep the exact diff-backed plan out of per-process environment and Actions
+// output limits. CI transports this file as a named artifact.
+if (process.env.CI_TEST_SELECTION_FILE) {
+  mkdirSync(dirname(process.env.CI_TEST_SELECTION_FILE), { recursive: true });
+  writeFileSync(
+    process.env.CI_TEST_SELECTION_FILE,
+    JSON.stringify(testSelection),
+  );
+}
 if (process.env.GITHUB_OUTPUT)
   appendFileSync(
     process.env.GITHUB_OUTPUT,
@@ -330,7 +339,6 @@ if (process.env.GITHUB_OUTPUT)
       ...selected,
       tier,
       matrix: JSON.stringify(matrix),
-      test_selection: JSON.stringify(testSelection),
     })
       .map(([key, value]) => `${key}=${value}\n`)
       .join(""),

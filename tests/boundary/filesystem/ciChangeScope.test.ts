@@ -96,6 +96,7 @@ async function classify(
         GITHUB_EVENT_NAME: event,
         CI_FULL: String(full),
         CI_SKIP_FULL: String(skipFull),
+        CI_TEST_SELECTION_FILE: join(directory, "selection", "plan.json"),
         GITHUB_OUTPUT: output,
       },
     },
@@ -244,14 +245,18 @@ it("emits an observational owner proposal without changing ordinary or full port
     code: true,
     testSelection: { mode: "candidate", owners: ["evm"] },
   });
-  expect(
-    await classify(directory, base, head, "pull_request", true),
-  ).toMatchObject({
+  const fullPlan = await classify(directory, base, head, "pull_request", true);
+  expect(fullPlan).toMatchObject({
     code: true,
     testSelection: { mode: "full", owners: [] },
   });
   const output = await readFile(join(directory, "scope-output"), "utf8");
-  expect(output).toContain('test_selection={"version":1,"mode":"full"');
+  expect(output).not.toContain("test_selection=");
+  expect(
+    JSON.parse(
+      await readFile(join(directory, "selection", "plan.json"), "utf8"),
+    ),
+  ).toEqual(fullPlan.testSelection);
 });
 
 it("does not charge a documentation PR for unrelated implementation updates on main", async () => {

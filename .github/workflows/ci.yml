@@ -80,7 +80,6 @@ jobs:
       ghidra_bridge: ${{ steps.plan.outputs.ghidra_bridge }}
       website: ${{ steps.plan.outputs.website }}
       matrix: ${{ steps.plan.outputs.matrix }}
-      test_selection: ${{ steps.plan.outputs.test_selection }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -124,7 +123,17 @@ jobs:
           HEAD_SHA: ${{ inputs.source_sha || github.event.pull_request.head.sha || github.sha }}
           CI_FULL: ${{ inputs.source_sha != '' || contains(github.event.pull_request.labels.*.name, 'ci:full') }}
           CI_SKIP_FULL: ${{ steps.qualification.outputs.run_full == 'false' }}
+          CI_TEST_SELECTION_FILE: .cache/ci-test-selection/plan.json
         run: node scripts/ci/plan.mjs
+      - name: Retain exact test selection plan
+        if: steps.plan.outputs.code == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-test-selection-plan
+          path: .cache/ci-test-selection/plan.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
 
   static:
     name: Static checks
@@ -533,6 +542,12 @@ jobs:
           --reporter=./scripts/ci/test-timing-reporter.mjs
           --outputFile.junit=test-results.xml
           --outputFile.json=test-results.json
+      - name: Restore exact test selection plan
+        if: needs.changes.outputs.code == 'true' && !cancelled()
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ci-test-selection-plan
+          path: .cache/ci-test-selection
       - name: Summarize slowest test files
         if: needs.changes.outputs.code == 'true' && !cancelled()
         env:
@@ -541,7 +556,7 @@ jobs:
           SOURCE_RESULT: ${{ needs.test-source.result }}
           MERGE_RESULT: ${{ needs.changes.outputs.tier == 'full' && steps.merge.outcome || steps.merge-fast.outcome }}
           CI_VERIFY_TEST_INVENTORY: "true"
-          CI_TEST_SELECTION: ${{ needs.changes.outputs.test_selection }}
+          CI_TEST_SELECTION_FILE: .cache/ci-test-selection/plan.json
           CI_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: node scripts/ci/test-report.mjs
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -700,6 +715,12 @@ jobs:
       - run: npm run verify:windows-native:artifact
       - name: Verify NativeAOT diagnostic applicability on this host
         run: npm run test:focused -- tests/evaluation/package/nativeAotDiagnostics.test.ts
+      - name: Verify native Darwin process ownership boundaries
+        if: matrix.platform == 'darwin'
+        run: >-
+          npm run test:focused --
+          tests/boundary/process/darwinProcessRunTokenReader.test.ts
+          src/process/DarwinProcessRunTokenReader.diagnostics.test.ts
       - run: npm run verify:package
         env:
           npm_config_cache: ${{ steps.npm-cache.outputs.path }}

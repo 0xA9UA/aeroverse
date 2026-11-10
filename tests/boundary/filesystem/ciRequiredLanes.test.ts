@@ -93,6 +93,34 @@ it("binds SQLite compatibility jobs to the build's prepared runtime artifact and
   expect(downloads[0]?.with).toEqual({ name, path: "." });
 });
 
+it("runs native Darwin ownership parsing and diagnostic controls on every macOS package host", async () => {
+  const { jobs } = await workflow();
+  const steps = z
+    .array(
+      z.object({
+        name: z.string().optional(),
+        if: z.string().optional(),
+        run: z.string().optional(),
+      }),
+    )
+    .parse(jobs["package-e2e"]?.steps);
+  const native = steps.find(
+    (step) => step.name === "Verify native Darwin process ownership boundaries",
+  );
+  expect(native?.if).toBe("matrix.platform == 'darwin'");
+  expect(native?.run?.split(/\s+/u)).toEqual([
+    "npm",
+    "run",
+    "test:focused",
+    "--",
+    "tests/boundary/process/darwinProcessRunTokenReader.test.ts",
+    "src/process/DarwinProcessRunTokenReader.diagnostics.test.ts",
+  ]);
+  expect(steps.indexOf(native!)).toBeLessThan(
+    steps.findIndex((step) => step.run === "npm run verify:package"),
+  );
+});
+
 it("exports every canonical scope with read authority for admission and keeps telemetry outside the gate", async () => {
   const { jobs } = await workflow();
   const CI_FLAGS = await scopeFlags();

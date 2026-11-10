@@ -1534,6 +1534,12 @@ tests. Shared inputs, unknown paths, missing owner tests, and removed tests fall
 back to the complete inventory. Renames account for both paths. Main, scheduled,
 manual, and `ci:full` runs always propose the full suite.
 
+The classifier writes the exact plan to `.cache/ci-test-selection/plan.json`
+and transfers it through the `ci-test-selection-plan` artifact. The report job
+passes only this file's path to its process, so large repository diffs do not
+exceed operating-system environment limits or lose changed-path evidence.
+Missing or invalid selection artifacts fail report validation.
+
 The source group and every built shard together still execute the complete suite. The existing report merge
 compares the proposal with actual module outcomes and retains
 `.cache/ci-test-selection/report.json` in `test-results`, including selected and
@@ -1703,6 +1709,12 @@ capability lane. Package checks cover installation, CLI/MCP discovery,
 target-free analysis, configuration backups/recovery, Evidence and owned
 lifecycle; Inspector checks execute source-owned loopback targets and special
 filename cases.
+
+Every macOS package host also runs the native Darwin run-token reader and
+diagnostic regressions before package verification. These compile and execute
+the Swift parser fixture on the host architecture, including restricted process
+environment observations, while the Apple artifact lane retains its broader
+native and process-boundary coverage.
 
 POSIX package verification resolves the runner's configured npm cache before
 creating disposable client homes and passes that location to its child installs.
