@@ -1,3 +1,4 @@
+import { pcapCaptureHostSupported } from "../domain/pcap/pcapAnalysis.js";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -177,7 +178,7 @@ describe("capability failure reasons", () => {
           ],
         }),
       ),
-    ).toMatchObject({ available: false, reason: "provider_missing" });
+    ).toMatchObject({ available: true, reason: "available" });
   });
 
   it.each([
@@ -412,6 +413,22 @@ describe("compact tool availability", () => {
 });
 
 describe("partial navigation availability", () => {
+  it("requires a target before diagnosing navigation provider modes", () => {
+    expect(entry("get_navigation_context", status())).toMatchObject({
+      available: false,
+      reason: "target_required",
+      default_mode_available: false,
+      modes: [
+        { name: "current_selection", available: false },
+        { name: "explicit_document", available: false },
+      ],
+    });
+    expect(
+      TOOL_CONTRACTS.find((tool) => tool.name === "get_navigation_context"),
+    ).toMatchObject({
+      requiresActiveTarget: true,
+    });
+  });
   it("allows explicit documents when the provider has no current-document getter", () => {
     const capabilities = [
       "current_document",
@@ -561,6 +578,24 @@ it("reports host denial before target mismatch but keeps composed workflow prere
 });
 
 describe("binary_overview capability requirements", () => {
+  it("admits a native overview without requiring full inventory operations", () => {
+    expect(
+      entry(
+        "binary_overview",
+        status({
+          open: true,
+          kind: "executable",
+          capabilities: [
+            {
+              operation: "read_binary_inventory_summary",
+              available: true,
+              reason: null,
+            },
+          ],
+        }),
+      ),
+    ).toMatchObject({ available: true, reason: "available" });
+  });
   it("admits a provider with current_document and other mandatory capabilities", () => {
     const capabilities = [
       "current_document",
@@ -743,4 +778,110 @@ describe("trace_feature requirements", () => {
       ),
     ).toMatchObject({ available: false, reason: "provider_missing" });
   });
+});
+
+const HOST_RESTRICTED_TOOLS = [
+  ["inspect_packet_capture", "packetCapture", "packetCaptureEnabled"],
+  ["inspect_packet_fields", "packetCapture", "packetCaptureEnabled"],
+  ["decode_signal_recording", "signalRecording", "signalRecordingEnabled"],
+  ["inspect_signal_decoders", "signalRecording", "signalRecordingEnabled"],
+  ["inspect_evm_interface", "evmInterface", "evmInterfaceEnabled"],
+  ["inspect_binary_layout", "binaryLayout", "binaryLayoutEnabled"],
+  ["inspect_recorded_crash", "recordedCrash", "recordedCrashEnabled"],
+  [
+    "inspect_firmware_regions",
+    "firmwareInspection",
+    "firmwareInspectionEnabled",
+  ],
+  ["extract_firmware", "firmwareExtraction", "firmwareExtractionEnabled"],
+  [
+    "recover_javascript_sources",
+    "javascriptRecovery",
+    "javascriptRecoveryEnabled",
+  ],
+] as const;
+
+describe("host-restricted integrations", () => {
+  it.each(HOST_RESTRICTED_TOOLS)(
+    "reports %s on an unsupported host before its configuration",
+    (name, feature, enabledField) => {
+      const availability = (enabled: boolean, hostUnsupported: boolean) =>
+        buildCapabilityInventory(
+          { open: false, capabilities: [] },
+          {
+            processCaptureEnabled: true,
+            ...({ [enabledField]: enabled } as Record<
+              typeof enabledField,
+              boolean
+            >),
+            hostUnsupported: { [feature]: hostUnsupported },
+          },
+        ).find((tool) => tool.name === name);
+      expect(availability(true, true)).toMatchObject({
+        available: false,
+        reason: "unsupported_host",
+      });
+      expect(availability(false, false)).toMatchObject({
+        available: false,
+        reason: "provider_missing",
+      });
+      expect(availability(true, false)).toMatchObject({
+        available: true,
+        reason: "available",
+      });
+    },
+  );
+});
+
+it.each(["darwin", "linux", "win32"])(
+  "distinguishes pcap capture host support from its target-free client probe on %s",
+  (platform) => {
+    const tools = buildCapabilityInventory(
+      { open: false, capabilities: [] },
+      {
+        processCaptureEnabled: true,
+        hostUnsupported: { pcapCapture: !pcapCaptureHostSupported(platform) },
+      },
+    );
+    expect(
+      tools.find(({ name }) => name === "inspect_pcap_client"),
+    ).toMatchObject({ available: true, reason: "available" });
+    expect(
+      tools.find(({ name }) => name === "inspect_pcap_capture"),
+    ).toMatchObject(
+      platform === "darwin"
+        ? {
+            available: false,
+            reason: "unsupported_host",
+            remediation: expect.stringContaining("native memory bound"),
+          }
+        : { available: true, reason: "available" },
+    );
+  },
+);
+
+it("keeps independent native sessions discoverable without an unrelated binary target", () => {
+  const entries = buildCapabilityInventory(status(), enabledPolicy);
+  for (const name of [
+    "list_cutter_sessions",
+    "cutter_command",
+    "start_gdb_session",
+    "gdb_console",
+    "gdb_session_status",
+    "close_gdb_session",
+    "start_rizin_debug_session",
+    "rizin_debug_command",
+    "rizin_debug_session_status",
+    "close_rizin_debug_session",
+    "inspect_with_objdump",
+    "execute_rizin_command",
+  ]) {
+    expect(
+      entries.find((entry) => entry.name === name),
+      name,
+    ).toMatchObject({ available: true });
+  }
+  expect(entries.find((entry) => entry.name === "inspect_macho")).toMatchObject(
+    { available: false, reason: "target_required" },
+  );
 });

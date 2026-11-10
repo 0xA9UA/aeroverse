@@ -1,4 +1,10 @@
+import { nativeDispatchMetadataInputSchema } from "../domain/native/objcSwiftMetadata.js";
 import { z } from "incur";
+import {
+  addressOrProcedureGuidance,
+  equalSelectorGuidance,
+  resolveCliAnalysisSelector,
+} from "./analysisSelector.js";
 
 import type { DirectAnalysis } from "../composition/directAnalysis.js";
 import { CLI_COMMANDS } from "../cliCommandNames.js";
@@ -7,6 +13,7 @@ import type { Logger } from "pino";
 import {
   directAnalysisOptionsFromCli,
   nativeOpenOptionFields,
+  snapshotSelectionOption,
 } from "./options.js";
 import type { CliInstance } from "./types.js";
 
@@ -264,18 +271,13 @@ const registerNativeDispatchMetadataCommand = (
       path: z.string().describe("Target path used to bind the result evidence"),
     }),
     options: z.object({
-      maxRecords: z
-        .number()
-        .int()
-        .min(1)
-        .max(20_000)
-        .default(5_000)
-        .describe("Maximum symbol records to inspect"),
-      snapshot: z
-        .string()
-        .min(1)
-        .optional()
-        .describe("Load or update the local analysis snapshot"),
+      maxRecords: nativeDispatchMetadataInputSchema.shape.max_records.describe(
+        "Maximum symbol records to inspect",
+      ),
+      maxInputBytes: nativeDispatchMetadataInputSchema.shape.max_input_bytes,
+      snapshot: snapshotSelectionOption.describe(
+        "Load or update the local analysis snapshot",
+      ),
       ...nativeOpenOptionFields,
     }),
     run: async ({ args, options }) =>
@@ -283,7 +285,12 @@ const registerNativeDispatchMetadataCommand = (
         runDirectAnalysis(
           args.path,
           "inspect_native_dispatch_metadata",
-          { max_records: options.maxRecords },
+          {
+            max_records: options.maxRecords,
+            ...(options.maxInputBytes === undefined
+              ? {}
+              : { max_input_bytes: options.maxInputBytes }),
+          },
           directAnalysisOptionsFromCli(logger, options),
         ),
       ),
@@ -354,17 +361,22 @@ const registerNativeApiCommand = (
   runDirectAnalysis: DirectAnalysis["runDirectAnalysis"],
 ): void => {
   cli.command(CLI_COMMANDS.inspectNativeApi, {
-    description: "Reconstruct one native function API boundary with evidence",
+    description: `Reconstruct one native function API boundary with evidence. ${addressOrProcedureGuidance} ${equalSelectorGuidance}`,
     args: z.object({
       path: z.string().describe("App or program path"),
-      address: z.string().describe("Procedure name or address"),
+      address: z
+        .string()
+        .optional()
+        .describe(`Procedure name or address. ${addressOrProcedureGuidance}`),
     }),
     options: z.object({
-      snapshot: z
+      procedure: z
         .string()
-        .min(1)
         .optional()
-        .describe("Load and update a local analysis snapshot"),
+        .describe(
+          `Procedure selector; use this option for symbols beginning with a dash. ${addressOrProcedureGuidance}`,
+        ),
+      snapshot: snapshotSelectionOption,
       ...nativeOpenOptionFields,
     }),
     run: ({ args, options }) =>
@@ -372,7 +384,14 @@ const registerNativeApiCommand = (
         runDirectAnalysis(
           args.path,
           "inspect_native_api",
-          { procedure: args.address },
+          {
+            procedure: resolveCliAnalysisSelector(
+              args.address,
+              options.procedure,
+              "procedure",
+              "inspect_native_api",
+            ),
+          },
           directAnalysisOptionsFromCli(logger, options),
         ),
       ),

@@ -1,9 +1,22 @@
+import type {
+  BinaryArchitecture,
+  RawOnlyArchitecture,
+} from "./binaryTargetTypes.js";
 import { err, ok, type Result } from "./result.js";
+
+/** CPU families an ELF e_machine can name; arm64_32 is a Mach-O-only CPU type. */
+type ElfArchitecture = Exclude<
+  BinaryArchitecture,
+  RawOnlyArchitecture | "arm64_32"
+>;
 
 export interface ElfFixedHeader {
   readonly elfClass: 32 | 64;
   readonly byteOrder: "little" | "big";
   readonly headerSize: number;
+  readonly machine: number;
+  readonly osAbi: number;
+  readonly architecture: ElfArchitecture | null;
 }
 
 /**
@@ -43,7 +56,10 @@ export const readElfFixedHeader = (
     littleEndian ? bytes.readUInt16LE(offset) : bytes.readUInt16BE(offset);
   const readU32 = (offset: number): number =>
     littleEndian ? bytes.readUInt32LE(offset) : bytes.readUInt32BE(offset);
-  if (readU32(20) !== 1) return err("unsupported ELF header version");
+  const machine = readU16(18);
+  // NVIDIA CUBIN uses ELFOSABI_CUDA and a vendor ABI version in e_version.
+  if (readU32(20) !== 1 && !(machine === 190 && bytes[7] === 0x33))
+    return err("unsupported ELF header version");
   const headerSize = readU16(elfClass === 32 ? 40 : 52);
   if (headerSize < minimumSize || headerSize > totalBytes)
     return err("invalid ELF header size");
@@ -51,5 +67,32 @@ export const readElfFixedHeader = (
     elfClass,
     byteOrder: littleEndian ? "little" : "big",
     headerSize,
+    machine,
+    osAbi: bytes[7]!,
+    architecture: elfArchitecture(machine) ?? null,
   });
+};
+
+export const elfArchitecture = (
+  machine: number,
+): ElfArchitecture | undefined => {
+  switch (machine) {
+    case 3:
+      return "x86";
+    case 62:
+      return "x86_64";
+    case 8: // EM_MIPS: ISA, ABI and byte order remain separate ELF facts.
+      return "mips";
+    case 20: // EM_PPC; byte order and processor variant remain ELF declarations.
+      return "powerpc";
+    case 40:
+      return "arm";
+    case 164: // EM_HEXAGON: Qualcomm Hexagon DSP (QDSP6).
+      return "hexagon";
+    case 183:
+      return "arm64";
+    case 243: // EM_RISCV: XLEN, byte order and e_flags remain separate ELF facts.
+      return "riscv";
+  }
+  return undefined;
 };

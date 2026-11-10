@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import { describe, expect, it } from "vitest";
 
+import { inspectWindowsNativeReadiness } from "../process/WindowsAuthority.js";
 import {
   loadWindowsNativeAuthority,
   type WindowsNativeLoadHost,
@@ -66,7 +67,7 @@ const fixture = (
   return { host, manifest, bytes, loads: () => loads };
 };
 
-describe("packaged Windows native admission", () => {
+describe("packaged Windows native compatibility", () => {
   it.each([true, false])(
     "preserves protocol stdin capability %s alongside existing job controls",
     (protocolStdin) => {
@@ -127,6 +128,30 @@ describe("packaged Windows native admission", () => {
     },
   );
 
+  it("names the absent packaged manifest and matching-version recovery", () => {
+    const value = fixture();
+    const missing = Object.assign(new Error("file absent"), {
+      code: "ENOENT",
+    });
+    expect(
+      loadWindowsNativeAuthority({
+        ...value.host,
+        readManifest: () => {
+          throw missing;
+        },
+      }),
+    ).toMatchObject({
+      available: false,
+      failureStage: "artifact",
+      reason: expect.stringMatching(
+        /Missing packaged Windows native file native\/windows\/build\/manifest\.json \(ENOENT\).*native\/windows\/build\/rea-windows-x64\.node.*native\/windows\/README\.md/u,
+      ),
+    });
+    expect(value.loads()).toBe(0);
+  });
+});
+
+describe("packaged Windows native artifact validation", () => {
   it("rejects tampering even when the original file was a valid PE image", () => {
     const value = fixture();
     value.bytes[127] = 1;
@@ -197,6 +222,34 @@ describe("packaged Windows native admission", () => {
       failureStage: "self-test",
       retryable: true,
       reason: expect.stringContaining("private DACL: access denied"),
+    });
+  });
+
+  it("explains an OS policy refusal of the verified artifact without file-restore advice", () => {
+    const value = fixture();
+    const loaded = loadWindowsNativeAuthority({
+      ...value.host,
+      loadArtifact: () => {
+        throw new Error(
+          "An Application Control policy has blocked this file.\r\n\\\\?\\C:\\rea\\rea-windows-x64.node",
+        );
+      },
+    });
+    expect(loaded).toMatchObject({
+      available: false,
+      failureStage: "load",
+      reason: expect.stringContaining(
+        "An Application Control policy has blocked this file.",
+      ),
+    });
+    expect(loaded).not.toHaveProperty("retryable");
+    const readiness = inspectWindowsNativeReadiness("win32", loaded);
+    expect(readiness).toMatchObject({
+      code: "runtime_missing",
+      remediation: expect.stringContaining("Smart App Control"),
+    });
+    expect(readiness).not.toMatchObject({
+      remediation: expect.stringContaining("restore native/windows/build"),
     });
   });
 

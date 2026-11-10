@@ -83,7 +83,7 @@ export const readMipsElfMetadata = async (
   if (
     fixedHeader.value.elfClass !== 32 ||
     fixedHeader.value.byteOrder !== metadata.byteOrder ||
-    u16(bytes, 18) !== 8 ||
+    fixedHeader.value.machine !== 8 ||
     u16(bytes, 16) !== metadata.type ||
     u32(bytes, 36) !== metadata.flags
   )
@@ -179,7 +179,11 @@ export const readMipsElfMetadata = async (
         gnuAttributes = parsed.value;
         continue;
       }
-      if (metadata.type === 3 && table.optional && (type === 4 || type === 9))
+      if (
+        metadata.type === 3 &&
+        table.optional &&
+        (type === 4 || type === 9 || type === 19)
+      )
         relocationSections.push({
           type,
           offset: u32(contents.value, position + 16),

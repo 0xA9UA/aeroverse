@@ -34,8 +34,8 @@ export const managedMembersViewRequestSchema = z.strictObject({
     "field_accesses",
     "user_strings",
   ]),
-  offset: z.number().int().nonnegative().default(0),
-  limit: z.number().int().positive().default(64),
+  offset: z.int().nonnegative().default(0),
+  limit: z.int().positive().default(64),
 });
 
 const rowsOf = <C extends string, S extends z.ZodArray>(
@@ -60,15 +60,19 @@ export const managedMembersViewPageSchema = z.discriminatedUnion("collection", [
 
 type ManagedMembersViewPage = z.infer<typeof managedMembersViewPageSchema>;
 
-const nullableCount = z.number().int().nonnegative().nullable();
+const nullableCount = z.int().nonnegative().nullable();
 
 /** Keep identity, selection and coverage; member collections remain retained. */
 export const managedMemberSummarySchema = z.strictObject({
+  signature_resolution: member.signature_resolution,
+  nesting_read: member.nesting_read,
   artifact: member.artifact,
   module: member.module,
+  assembly: member.assembly,
   metadata: member.metadata,
   identity_scope: member.identity_scope,
   selection: member.selection.unwrap(),
+  method_rows: member.method_rows,
   coverage: member.coverage,
   user_strings: z
     .strictObject({
@@ -78,20 +82,23 @@ export const managedMemberSummarySchema = z.strictObject({
     .nullable(),
   limitations: member.limitations,
   reported_counts: z.strictObject({
-    types: z.number().int().nonnegative(),
+    types: z.int().nonnegative(),
     exported_types: nullableCount,
-    fields: z.number().int().nonnegative(),
-    methods: z.number().int().nonnegative(),
-    member_refs: z.number().int().nonnegative(),
-    call_edges: z.number().int().nonnegative(),
-    field_accesses: z.number().int().nonnegative(),
+    fields: z.int().nonnegative(),
+    methods: z.int().nonnegative(),
+    member_refs: z.int().nonnegative(),
+    call_edges: z.int().nonnegative(),
+    field_accesses: z.int().nonnegative(),
     user_strings: nullableCount,
   }),
 });
 
 export const managedMembersViewContextSchema = z.strictObject({
+  signature_resolution: member.signature_resolution,
+  nesting_read: member.nesting_read,
   identity_scope: member.identity_scope,
   selection: member.selection.unwrap(),
+  method_rows: member.method_rows,
   source_metadata_status: member.metadata.shape.status,
   source_coverage: member.coverage,
 });
@@ -269,8 +276,11 @@ export const projectManagedMemberView = (
     view,
     page,
     ...shared,
+    signature_resolution: report.signature_resolution,
+    nesting_read: report.nesting_read,
     identity_scope: report.identity_scope,
     selection: report.selection,
+    method_rows: report.method_rows,
     source_metadata_status: report.metadata.status,
     source_coverage:
       view.collection === "user_strings" && report.user_strings !== null

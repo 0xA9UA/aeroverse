@@ -177,29 +177,23 @@ const joinPayloads = (
   input: ConsoleCorrelationInput,
   collector: EdgeCollector,
 ): void => {
-  const payloads = new Map<string, ConsoleObservationEvent[]>();
+  const payloads = new Map<
+    string,
+    { network: ConsoleObservationEvent[]; other: ConsoleObservationEvent[] }
+  >();
   for (const event of input.events) {
     const payload = event.payload;
     if (payload === undefined || !payload.complete || payload.bytes === 0)
       continue;
     const key = `${payload.sha256}:${payload.bytes}`;
-    const bucket = payloads.get(key) ?? [];
-    bucket.push(event);
+    const bucket = payloads.get(key) ?? { network: [], other: [] };
+    (event.kind === "network" ? bucket.network : bucket.other).push(event);
     payloads.set(key, bucket);
   }
   for (const bucket of payloads.values()) {
-    for (
-      let i = 0;
-      i < bucket.length && collector.truncation === null;
-      i += 1
-    ) {
-      const a = bucket[i];
-      if (a === undefined) continue;
-      for (const b of bucket.slice(i + 1)) {
-        if (!collector.compare()) break;
-        if (a.kind === b.kind || (a.kind !== "network" && b.kind !== "network"))
-          continue;
-        const [from, to] = rank[a.kind] < rank[b.kind] ? [a, b] : [b, a];
+    for (const from of bucket.other) {
+      for (const to of bucket.network) {
+        if (!collector.compare()) return;
         collector.add(
           from.event_id,
           to.event_id,
@@ -211,38 +205,87 @@ const joinPayloads = (
   }
 };
 
+type TimeInterval = {
+  event: ConsoleObservationEvent;
+  lower: bigint;
+  upper: bigint;
+};
+
+/** A forward candidate exists exactly when the target interval overlaps the
+ * source interval extended by the selected window. Sweep boundaries so only
+ * overlapping events of different kinds consume the candidate budget.
+ */
+const joinTimeIntervals = (
+  from: readonly TimeInterval[],
+  to: readonly TimeInterval[],
+  window: bigint,
+  collector: EdgeCollector,
+): void => {
+  if (from.length === 0 || to.length === 0) return;
+  const boundaries = [
+    ...from.flatMap((entry) => [
+      { time: entry.lower, opening: true, source: true, event: entry.event },
+      {
+        time: entry.upper + window,
+        opening: false,
+        source: true,
+        event: entry.event,
+      },
+    ]),
+    ...to.flatMap((entry) => [
+      { time: entry.lower, opening: true, source: false, event: entry.event },
+      { time: entry.upper, opening: false, source: false, event: entry.event },
+    ]),
+  ];
+  boundaries.sort((a, b) => {
+    if (a.time !== b.time) return a.time < b.time ? -1 : 1;
+    // Closed intervals touching at one nanosecond still form a candidate.
+    return Number(b.opening) - Number(a.opening);
+  });
+  const sources = new Set<ConsoleObservationEvent>();
+  const targets = new Set<ConsoleObservationEvent>();
+  for (const boundary of boundaries) {
+    const active = boundary.source ? sources : targets;
+    if (!boundary.opening) {
+      active.delete(boundary.event);
+      continue;
+    }
+    for (const other of boundary.source ? targets : sources) {
+      if (!collector.compare()) return;
+      const source = boundary.source ? boundary.event : other;
+      const target = boundary.source ? other : boundary.event;
+      collector.add(
+        source.event_id,
+        target.event_id,
+        "temporal-candidate",
+        "Clock intervals overlap a possible forward interval within the selected window; scheduling, polling and unrelated traffic can produce the same timing.",
+      );
+    }
+    active.add(boundary.event);
+  }
+};
+
 const joinTimeCandidates = (
   timeline: ConsoleCorrelationReport["timeline"],
   windowNs: string,
   collector: EdgeCollector,
 ): void => {
+  const groups: TimeInterval[][] = [[], [], [], []];
+  for (const entry of timeline) {
+    if (entry.aligned_timestamp_ns === null) continue;
+    const time = BigInt(entry.aligned_timestamp_ns);
+    const uncertainty = BigInt(entry.uncertainty_ns ?? "0");
+    groups[rank[entry.event.kind]]!.push({
+      event: entry.event,
+      lower: time - uncertainty,
+      upper: time + uncertainty,
+    });
+  }
   const window = BigInt(windowNs);
-  for (
-    let i = 0;
-    i < timeline.length && collector.truncation === null;
-    i += 1
-  ) {
-    const a = timeline[i];
-    if (a === undefined || a.aligned_timestamp_ns === null) continue;
-    for (let j = i + 1; j < timeline.length; j += 1) {
-      const b = timeline[j];
-      if (b === undefined || b.aligned_timestamp_ns === null) break;
-      if (!collector.compare()) break;
-      if (a.event.kind === b.event.kind) continue;
-      const [from, to] =
-        rank[a.event.kind] < rank[b.event.kind] ? [a, b] : [b, a];
-      const distance =
-        BigInt(to.aligned_timestamp_ns!) - BigInt(from.aligned_timestamp_ns!);
-      const uncertainty =
-        BigInt(from.uncertainty_ns ?? "0") + BigInt(to.uncertainty_ns ?? "0");
-      if (distance + uncertainty < 0n || distance - uncertainty > window)
-        continue;
-      collector.add(
-        from.event.event_id,
-        to.event.event_id,
-        "temporal-candidate",
-        "Clock intervals overlap a possible forward interval within the selected window; scheduling, polling and unrelated traffic can produce the same timing.",
-      );
+  for (let source = 0; source < groups.length; source += 1) {
+    for (let target = source + 1; target < groups.length; target += 1) {
+      if (collector.truncation !== null) return;
+      joinTimeIntervals(groups[source]!, groups[target]!, window, collector);
     }
   }
 };

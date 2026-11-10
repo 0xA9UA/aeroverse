@@ -164,6 +164,107 @@ describe("console cross-layer correlation", () => {
   });
 });
 
+describe("console correlation candidate selection", () => {
+  it.each([false, true])(
+    "finds a late action/request after unrelated packets (shared payloads: %s)",
+    (sharedPayloads) => {
+      const background = Array.from({ length: 2050 }, (_, index) =>
+        event(
+          `background-${index}`,
+          "network",
+          String(index * 10),
+          sharedPayloads
+            ? {
+                payload: {
+                  sha256: sha,
+                  bytes: 4,
+                  complete: true,
+                  representation: "datagram",
+                },
+              }
+            : {},
+        ),
+      );
+      const result = report(
+        input([
+          ...background,
+          event("search", "action", "100000"),
+          event("request", "network", "100010"),
+        ]),
+      );
+      expect(result.edges).toEqual([
+        expect.objectContaining({
+          from: "search",
+          to: "request",
+          relationship: "temporal-candidate",
+        }),
+      ]);
+      expect(result.coverage).toMatchObject({
+        complete: true,
+        candidate_comparisons: 1,
+        truncation_reason: null,
+      });
+    },
+  );
+
+  it("skips disjoint mixed-kind intervals without consuming the candidate budget", () => {
+    const kinds = ["action", "native", "ipc", "network"] as const;
+    const result = report(
+      input(
+        Array.from({ length: 2200 }, (_, index) =>
+          event(
+            `sparse-${index}`,
+            kinds[index % kinds.length]!,
+            String(index * 1000),
+          ),
+        ),
+      ),
+    );
+    expect(result.edges).toEqual([]);
+    expect(result.coverage).toMatchObject({
+      complete: true,
+      candidate_comparisons: 0,
+    });
+  });
+
+  it("retains inclusive interval boundaries and a later event with broad uncertainty", () => {
+    const result = report(
+      input(
+        [
+          event("action", "action", "100"),
+          event("reversed", "native", "80"),
+          event("touching", "ipc", "220"),
+          event("outside", "ipc", "221"),
+          event("distant", "network", "10000", { clock_id: "uncertain" }),
+        ],
+        {
+          clocks: [
+            {
+              clock_id: "host",
+              offset_ns: "0",
+              uncertainty_ns: "10",
+              evidence: "Fixture clock",
+            },
+            {
+              clock_id: "uncertain",
+              offset_ns: "0",
+              uncertainty_ns: "10000",
+              evidence: "Fixture uncertainty",
+            },
+          ],
+        },
+      ),
+    );
+    expect(
+      result.edges
+        .filter(({ from }) => from === "action")
+        .map(({ to }) => to)
+        .sort(),
+    ).toEqual(["distant", "reversed", "touching"]);
+    expect(result.coverage.complete).toBe(true);
+  });
+});
+
 describe("console correlation boundaries", () => {
   it.each([
     [event("dup", "action", "1"), event("dup", "native", "2")],

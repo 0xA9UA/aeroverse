@@ -181,10 +181,13 @@ def main():
                  'inspect_android_class', 'inspect_android_method',
                  'inspect_firmware_regions', 'inspect_managed_artifact',
                  'inspect_sqlite_database', 'inspect_pcap_capture',
+                 'inspect_web_network_capture',
                  'inspect_packet_capture', 'inspect_packet_fields',
+                 'decode_signal_recording', 'inspect_signal_decoders',
                  'inspect_managed_members', 'inspect_managed_native_boundaries',
                  'inspect_artifact', 'inspect_wasm_artifact',
                  'inspect_evm_interface', 'get_evidence_bundle', 'export_evidence_bundle',
+                 'import_evidence_bundle', 'list_unknowns', 'verify_unknown_resolution',
                  'capture_browser_scenario',
                  'resolve_containing_procedure', 'analyze_function', 'close_binary']:
         config += '[mcp_servers.rea.tools.' + tool + ']\napproval_mode = "approve"\n'

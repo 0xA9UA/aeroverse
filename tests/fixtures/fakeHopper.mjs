@@ -7,7 +7,13 @@ const [
   shutdownMode = "acknowledge",
   diagnosticMode = "quiet",
   healthMode = "ready",
+  inventoryFailure = "none",
+  advertisedRequestBytes,
 ] = process.argv.slice(2);
+const maxRequestBytes =
+  advertisedRequestBytes === undefined
+    ? 16 * 1024 * 1024
+    : Number(advertisedRequestBytes);
 let diagnosticOutputEmitted = false;
 const heldReplies = new Map();
 const sockets = new Set();
@@ -218,6 +224,7 @@ const server = createServer((socket) => {
                 version: "1.0.0",
                 run_id: runId,
                 process_id: process.pid,
+                max_request_bytes: maxRequestBytes,
               },
             },
             true,
@@ -229,6 +236,7 @@ const server = createServer((socket) => {
         request.method === "shutdown" ||
         request.method === "shutdown_document"
       ) {
+        if (shutdownMode === "exit-without-ack") process.exit(0);
         send({ id: request.id, result: shutdownResult() });
         if (shutdownMode !== "cleanup-required") setTimeout(closeServer, 2);
       } else if (request.method === "hang") {
@@ -246,6 +254,19 @@ const server = createServer((socket) => {
         for (const message of bridgeEventMessages) send(message);
       } else if (request.method === "capability_unavailable") {
         send(capabilityUnavailableResult(request.id));
+      } else if (
+        inventoryFailure !== "none" &&
+        (request.method === "list_strings" ||
+          request.method === "list_procedures")
+      ) {
+        send({
+          id: request.id,
+          error: {
+            code: -32000,
+            type: inventoryFailure,
+            message: "fixture inventory unavailable",
+          },
+        });
       } else if (request.method === "current_document") {
         send({ id: request.id, result: "fixture" });
       } else if (enhancedFixtureResult(request.method) !== undefined) {

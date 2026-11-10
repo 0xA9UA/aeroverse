@@ -36,7 +36,73 @@ const stageHapEntries = [
   { path: "META-INF/FIXTURE.p7b", content: "opaque signing" },
 ] as const;
 
+it("retains inventoried certificate-block suffixes without claiming verified signatures", async () => {
+  const names = ["CERT.RSA", "CERT.DSA", "CERT.EC", "FIXTURE.p7b"];
+  const path = await writeApplicationZip(
+    "rea-harmony-certificate-paths-",
+    "Fixture.hap",
+    [
+      ...names.map((name) => ({
+        path: `META-INF/${name}`,
+        content: "opaque bytes",
+      })),
+      { path: "META-INF/MANIFEST.MF", content: "manifest" },
+      { path: "META-INF/CERT.SF", content: "signature file" },
+    ],
+  );
+  const graph = requireDeterministicProjection(
+    projectHarmonyApplicationEvidence,
+    await inventoryApplicationPackage(path),
+    harmonyApplicationProjectionResultSchema,
+  );
+  expect(graph.components.signing.map(({ path }) => path).sort()).toEqual(
+    names.map((name) => `META-INF/${name}`).sort(),
+  );
+});
+
 describe("HarmonyOS application projection", () => {
+  it.each(["js", "mjs", "cjs", "jsx", "ts", "tsx", "mts", "cts"])(
+    "retains the JavaScript runtime hint for an authenticated .%s component",
+    async (extension) => {
+      const member = `assets/js/index.${extension}`;
+      const path = await writeApplicationZip(
+        "rea-harmony-javascript-",
+        "Fixture.hap",
+        [{ path: member, content: "export const value = 1;" }],
+      );
+      const inventory = await inventoryApplicationPackage(path);
+      const projection = requireDeterministicProjection(
+        projectHarmonyApplicationEvidence,
+        inventory,
+        harmonyApplicationProjectionResultSchema,
+      );
+      expect(projection.components.javascript).toEqual([
+        expect.objectContaining({ path: member, format: "javascript-bundle" }),
+      ]);
+      expect(projection.runtime_families).toEqual(["javascript"]);
+      expect(projection.coverage.status).toBe("complete-within-inventory");
+    },
+  );
+
+  it("does not infer JavaScript from unrelated inventory content", async () => {
+    const path = await writeApplicationZip(
+      "rea-harmony-no-javascript-",
+      "Fixture.hap",
+      [
+        { path: "module.json", content: "{}" },
+        { path: "assets/js/notes.txt", content: "ordinary text" },
+      ],
+    );
+    const inventory = await inventoryApplicationPackage(path);
+    const projection = requireDeterministicProjection(
+      projectHarmonyApplicationEvidence,
+      inventory,
+      harmonyApplicationProjectionResultSchema,
+    );
+    expect(projection.components.javascript).toEqual([]);
+    expect(projection.runtime_families).toEqual([]);
+  });
+
   it("projects deterministic Stage HAP components and explicit bridge hypotheses", async () => {
     const path = await writeApplicationZip(
       "rea-harmony-",
@@ -186,6 +252,34 @@ describe("HarmonyOS packaging boundaries", () => {
     ]);
   });
 
+  it("does not classify a rawfile named module.json as a manifest", async () => {
+    const path = await writeApplicationZip(
+      "rea-harmony-rawfile-module-manifest-",
+      "Legacy.hap",
+      [
+        { path: "config.json", content: '{"app":{}}' },
+        {
+          path: "assets/entry/resources/rawfile/module.json",
+          content: '{"note":"ordinary raw resource"}',
+        },
+      ],
+    );
+    const inventory = await inventoryApplicationPackage(path);
+    const result = projectHarmonyApplicationEvidence({
+      inventory_evidence: [inventory],
+    });
+    const projection = harmonyApplicationProjectionResultSchema.parse(
+      requireSuccessfulProjection(result).normalized_result,
+    );
+    expect(projection.packaging_model).toBe("fa");
+    expect(projection.components.manifests.map(({ path }) => path)).toEqual([
+      "config.json",
+    ]);
+    expect(projection.components.resources.map(({ path }) => path)).toEqual([
+      "assets/entry/resources/rawfile/module.json",
+    ]);
+  });
+
   it("rejects non-HarmonyOS inventory Evidence", async () => {
     const inventory = await createNonApplicationZipInventory(
       "rea-harmony-invalid-",
@@ -225,7 +319,7 @@ describe("HarmonyOS inventory coverage", () => {
     );
     const inventory = await inventoryApplicationPackage(path);
     expect(inventory.normalized_result).toMatchObject({
-      coverage_status: "complete",
+      coverage: { scope: "container-entries", status: "complete" },
     });
 
     const projection = requireDeterministicProjection(

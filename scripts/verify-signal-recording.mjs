@@ -12,6 +12,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { PrivateRuntimeRoot } from "../dist/process/PrivateRuntimeRoot.js";
 import { parseEvidence } from "../dist/domain/evidence.js";
+import { withVerifierCleanup } from "./lib/verifier-cleanup.mjs";
 import { createVerifierRun, completeVerifierRun } from "./lib/verifier-run.mjs";
 
 if (process.platform !== "linux")
@@ -38,6 +39,25 @@ const environment = {
   TEMP: root.path,
 };
 const client = new Client({ name: "signal-recording-verifier", version: "1" });
+// Real sigrok refusals of an unknown decoder ID must name the caller's field.
+const assertRejectedSelector = (
+  response,
+  operation,
+  field,
+  expectedExitCode = 1,
+) => {
+  assert.equal(response.isError, true);
+  const text = response.content.find((item) => item.type === "text")?.text;
+  const { error } = JSON.parse(text ?? "{}");
+  assert.equal(error.code, "invalid_request");
+  assert.equal(error.details.operation, operation);
+  assert.deepEqual(
+    error.details.issues.map((issue) => issue.path),
+    [[field]],
+  );
+  assert.equal(error.details.captured_output.exit_code, expectedExitCode);
+  return error;
+};
 const transport = new StdioClientTransport({
   command: process.execPath,
   args: [entrypoint, "mcp"],
@@ -83,7 +103,7 @@ const expectedAddressSpace = Math.min(
     .map((value) => (value === "unlimited" ? Infinity : Number(value))),
 );
 
-try {
+await withVerifierCleanup(async () => {
   await writeFile(path, source);
   await client.connect(transport);
   const advertised = (await client.listTools()).tools.find(
@@ -159,6 +179,26 @@ try {
     assert.equal(await readFile(path, "utf8"), source);
     cases++;
   }
+  const missingChannel = await client.callTool({
+    name: advertised.name,
+    arguments: {
+      path,
+      decoders: "uart:rx=REA_NO_SUCH_CHANNEL:baudrate=9600",
+      input_format: "vcd",
+    },
+  });
+  const channelError = assertRejectedSelector(
+    missingChannel,
+    advertised.name,
+    "decoders",
+    0,
+  );
+  assert.match(
+    channelError.details.captured_output.stderr,
+    /cli: No channel with name "REA_NO_SUCH_CHANNEL" found\./u,
+  );
+  assert.match(channelError.details.captured_output.stdout, /uart-1:/u);
+  cases++;
   const pagedLines = lines.slice(0, 7);
   let pagedTick = 1000;
   for (const byte of Array.from({ length: 120 }, (_, i) => i)) {
@@ -242,16 +282,18 @@ try {
     assert.equal(await readFile(pagedPath, "utf8"), pagedSource);
     cases++;
   }
-  for (const input of [
-    { path, decoders: "no_such_decoder" },
-    { path: join(root.path, "absent.vcd"), decoders: "uart" },
-    { path, decoders: "uart", driver: "demo" },
+  for (const [input, rejectedField] of [
+    [{ path, decoders: "no_such_decoder" }, "decoders"],
+    [{ path: join(root.path, "absent.vcd"), decoders: "uart" }],
+    [{ path, decoders: "uart", driver: "demo" }],
   ]) {
     const response = await client.callTool({
       name: advertised.name,
       arguments: input,
     });
     assert.equal(response.isError, true);
+    if (rejectedField !== undefined)
+      assertRejectedSelector(response, advertised.name, rejectedField);
     await client.ping();
     cases++;
   }
@@ -376,18 +418,14 @@ try {
     name: discoveryTool.name,
     arguments: { decoder: "rea_no_such_decoder" },
   });
-  assert.equal(unavailable.isError, true);
+  assertRejectedSelector(unavailable, discoveryTool.name, "decoder");
   cases++;
   await client.close();
   assert.deepEqual((await readdir(root.path)).sort(), [
     "paged.vcd",
     "recording with spaces.vcd",
   ]);
-} finally {
-  await client.close();
-  await transport.close();
-  await root.close();
-}
+}, [() => client.close(), () => transport.close(), () => root.close()]);
 console.log(
   JSON.stringify(
     {

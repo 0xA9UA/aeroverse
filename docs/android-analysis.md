@@ -34,6 +34,53 @@ One-shot CLI output remains complete. Older servers require the existing complet
 request after schema discovery. APK authenticity and runtime behavior remain
 unverified.
 
+## Manifest component projection
+
+`inspect_android_package` also returns a static inventory of declared
+activities, aliases, services, receivers and providers from the decoded
+manifest. `declared_name` preserves the source attribute; `name` resolves a
+relative name only when the manifest package is known and the resolved copy
+fits the UTF-8 byte budget. An unresolved package or exhausted name budget
+retains the declared name and marks the inventory partial. Empty component
+names and names with forbidden DEX characters retain their raw spelling and
+are not treated as identities. Valid DEX spaces, including boundary spaces,
+are preserved when resolving component names and matching alias targets.
+Whitespace in the manifest package is rejected by its separate package grammar.
+Component permissions inherit the application
+permission when no component permission is declared, except an activity alias
+with no permission: Android documents that case as requiring no permission
+through the alias. `permission_source` distinguishes a local declaration,
+inherited value, no requirement (including an explicit empty override), and a
+value omitted because its resource/manifest-placeholder token is unresolved
+or the total permission-byte budget was reached. Resource and placeholder
+references are not expanded at this parser boundary. Repeated inherited
+values share one inventory-wide byte budget.
+Provider `android:readPermission` and `android:writePermission` overrides are
+not projected as separate fields; their presence marks the inventory partial
+and is called out in `limitations`. Relative component names are not resolved
+against a manifest package with surrounding whitespace.
+Class-name segments follow DEX `SimpleName` characters, including a leading
+digit or hyphen, rather than Java source identifier rules. Relative-name
+expansion does not prove class existence, DEX-version compatibility or runtime
+loadability. SDK defaults accept JADX's decimal and hexadecimal integer
+spellings; the original SDK declaration strings remain unchanged.
+
+`exported` is the declared literal `true` or `false`, otherwise null.
+`exported_default` is the documented default only where it can be established;
+it remains null for unknown provider target SDKs, nonliteral declarations, or
+components with filters targeting API 31 or later that omit the now-required
+explicit declaration. A limitation records the latter validation error.
+Provider authorities and all inventory dimensions are bounded. `status:
+"partial"` and `limitations` identify omitted declarations or values; a
+capacity limitation appears only when an actual collection limit was reached.
+The projection does not merge manifests, expand resource references, or
+observe runtime enabled/export state.
+
+The service `foreground_service_type` field preserves the declared attribute,
+including an empty value or surrounding spaces; `null` means the attribute is
+absent or the component is not a service. This field does not validate service
+type tokens or establish runtime eligibility.
+
 ## Supply tools
 
 Use a **full JDK 17 or newer** (including its compiler module) and
@@ -103,9 +150,10 @@ that every class or engine operation will load successfully. Discovery limits
 each ZIP metadata read to 8 MiB before allocation; a larger directory reports
 the exhausted read budget and the selected JAR path.
 
-The current metadata bridge is verified on macOS arm64 with OpenJDK 21 and the
-public Appium ApiDemos fixture. The POSIX adapter also supports Linux; the new
-bridge has not yet undergone real verification on Linux/JDK 25.
+The filtered class-page bridge (protocol 2) is verified on Linux x86-64 with
+Temurin 21, public Appium ApiDemos 6.0.18 and NewPipe 0.29.1 APKs. Earlier
+metadata-bridge records covered macOS arm64/OpenJDK 21 and Windows x64/JDK 21;
+this protocol revision has not been rerun on those hosts or Linux/JDK 25.
 Windows x64 uses an owned Job Object with bidirectional stdio, atomic job
 assignment and kill-on-owner-close. Real Windows verification uses JDK 21 and
 the pinned JADX 0.7.1 JAR; see the real verification lane below.
@@ -146,10 +194,35 @@ queries accept the same `overload_index`; the bridge resolves the selected
 method node and the result reports its index and displayed signature. These
 indices are tied to the current artifact and engine, not stable across builds.
 
-The engine's smali fallback also joins same-name overloads; REA rejects that
-fallback for an overloaded method instead of attributing all bodies to one
-selected overload. Native/abstract methods with no decompiled body report
-`body_status: "not_available"` without inferring which implementation flag caused it.
+`inspect_android_class` also reports `dex_static_value` for each `static final`
+field whose class definition encodes a value in its DEX static values, so
+compile-time constants are readable even when the class has no `<clinit>`.
+Each value is typed: `boolean`, `byte`, `short`, `char` (UTF-16 code unit) and
+`int` values are JSON booleans or numbers, while `long`, `float` and `double`
+values are strings holding Java's text for the value, so 64-bit values stay
+exact. The field reports `null` when no value is encoded, the encoded value is
+null or of another kind, or the field is not `static final`. The value is read from parsed
+metadata without generating source, and a static initializer can still assign
+the field; use `inspect_android_method` on `<clinit>` for that evidence.
+Only `inspect_android_class` asks the bridge for these values.
+`inspect_android_method` and `trace_android_references` read the member-only
+class summary, so large encoded strings cannot push their member lookup past
+the 8 MiB protocol frame limit.
+
+Smali fallbacks select one complete block using the original method name and DEX
+descriptor, before applying the source byte limit. This preserves the selected
+overload even when Java code generation renames a method. If the selected Java
+body was omitted, including a method merged into a synthetic bridge, REA returns
+its original smali with the `java_body_unavailable` marker. The marker describes
+missing Java; it does not infer why the method was omitted or name a replacement.
+Unresolved or duplicate disassembly identities fail instead of attributing another
+method's instructions to the selection.
+
+Native and abstract methods are identified from access flags
+captured before code generation. They report `body_status: "not_available"`, an
+empty source, and the `native_method` or `abstract_method` marker; their declarations
+are not passed through the engine's source slicer. Other missing decompiled bodies
+do not establish either access flag.
 
 Static initializers (`<clinit>`) return smali with the
 `static_initializer_disassembly` marker. Java decompilation can move their
@@ -160,10 +233,19 @@ the same source byte limit and explicit truncation reporting.
 ## Interpret the result
 
 - Package inspection retains decoded manifest XML, summary declarations,
-  permissions and class/resource counts. Summary fields are extracted by the
-  upstream engine and should be checked against the retained XML when needed.
+  permissions and class/resource counts. REA's bridge selects the exact root
+  `AndroidManifest.xml` resource by original archive name and manifest type,
+  independently of asset order. One namespace-aware JDK XML parse supplies
+  summary attributes and direct permission/SDK declarations; namespace prefixes
+  and XML entity spelling do not change their values. Raw decoded XML is retained
+  exactly and only its displayed text is subject to the existing source byte cap.
+  Summaries use the complete selected XML before that cap. Document types are
+  unsupported; parsing does not load external DTDs, schemas, or XInclude files.
   Signature verification is explicitly `not_performed`.
-- Class search consumes all pages and checks their counts. An empty `query`
+- Class search filters the engine's cached top-level names before transferring
+  pages, then follows contiguous inventory positions without rescanning earlier
+  rows. It checks selection, scope, examined ranges and counts before reporting
+  complete coverage. Complete producer replies stay in Evidence; an empty `query`
   inventories all class-name rows; class names are decompiler representations.
   Repeated names remain repeated in `matches` so the inventory row count and
   producer evidence stay visible. `duplicate_names` identifies matching names
@@ -173,6 +255,13 @@ the same source byte limit and explicit truncation reporting.
   full reported display types, fields and inner class names. Synthetic members
   that code generation hides can appear in the inventory; it stays consistent
   after method decompilation within the retained session.
+  Class and method inspection and reference tracing accept either the exact
+  reported class name or its original binary name, including `$` in nested and
+  anonymous classes. The bridge keeps both identities from JADX; it does not
+  replace separators or guess suffix matches. Ambiguous selectors are refused.
+  Follow-up calls preserve the selected name, while results report the frozen
+  JADX display name. Quote `$` names in the shell, for example
+  `'com.example.Manager$WorkerThread'`.
   Exact DEX prototypes are reported from frozen JADX method metadata as
   `dex_descriptor`, for example `(I)V`. Display names can be JADX aliases;
   the descriptor alone is not a complete raw DEX method ID. Overload indices
@@ -233,11 +322,19 @@ rea project-android-application-graph '{"inventory_evidence":[<inventory_artifac
 ```
 
 The projection reports exact component paths and hashes, runtime-family hints,
-and path-based bridge hypotheses. It does not decode DEX or claim observed
-runtime calls. Framework hints match complete native library names, such as
+and path-based bridge hypotheses. File and slice occurrences supply component
+endpoints; directory trees and symlinks retain their identities in the source
+inventory without being classified as code files. It does not decode DEX or
+claim observed runtime calls. DEX/JVM runtime hints summarize the classified
+bytecode component lists. Framework hints match complete native library names,
+such as
 `libreactnativejni.so`, `libreactnative.so`, `libhermes.so`,
 `libhermes_executor.so`, `libflutter.so`, and `libunity.so`; unrelated names
 such as `libcommunity.so` and `libreactivity.so` do not identify those families.
+The signing list retains the `META-INF/MANIFEST.MF`, `.SF`, `.RSA`, `.DSA`, and
+`.EC` paths selected by Android's v1 verifier, including nested paths. These are
+inventory metadata candidates, not proof that a v1 signature verifies or that
+the APK is signed; use `inspect-apk-signature` for signature analysis.
 The bridge basis is inferred from the native path and repeated for each managed
 component, so it does not identify a specific JNI binding. Bridge hypotheses form a DEX/JVM-class by native-library
 Cartesian product. The projection computes the product and exact serialized
@@ -299,9 +396,43 @@ settings. Evidence reports the worker's observed `Runtime.maxMemory()` rounded
 down to MiB and retains exact bytes, Java version and visible processors in its
 raw runtime response. The observed allocatable heap can differ from configured
 `-Xmx`, especially with Serial GC. Heap is not a total RSS cap: the JVM also
-uses native memory. Independent REA instances have independent queues. Whole
-operations have a **120-second** execution deadline after reaching the queue's
-front; upstream decompilation is limited to **90 seconds**.
+uses native memory. A typed JVM memory allocation failure during APK loading
+reports `resource_constraint` with the observed maximum heap in bytes. Known
+heap failures name `REA_JADX_HEAP_MIB` in remediation; other memory regions
+remain unknown. A healthy doctor configuration check does not establish that
+any particular APK fits. Failures before the bridge can report a typed result
+and upstream errors from other operations retain their existing diagnostics;
+error text alone does not establish memory exhaustion.
+
+Independent REA instances have independent queues. Whole
+operations have a **120-second** execution deadline by default, starting after
+they reach the queue's front. For a known slow cold load, such as a large
+multidex APK, select another finite deadline:
+
+```sh
+export REA_JADX_OPERATION_TIMEOUT_MS=600000
+```
+
+The value must be a decimal millisecond count from 1 to 2147483647; anything
+else is refused before Java starts. REA reads it from the environment captured
+at process start. Changing that environment requires a new REA process. On a
+running MCP server, set `jadx.operation_timeout_ms` through
+`update_analysis_settings` to change the default for newly accepted operations;
+queued or running operations retain their accepted budget. The same deadline
+bounds each upstream call. Timeout recovery reports the effective milliseconds
+and range, with `details.limit` identifying the runtime setting. An invalid
+provider-local launch value can also be repaired by a runtime override; reset
+exposes that invalid launch value again. See the
+[settings design](design/limits-and-recovery.md#invalid-launch-configuration).
+A passing JADX configuration check in `rea doctor` reports its launch-derived
+`operation_timeout_ms`; it does not inspect another running server's overrides. Explicit
+cancellation still ends the operation immediately, and partial observations
+and owned-process cleanup are unchanged. Raising the deadline does not extend
+the bridge's 30-second startup handshake or the upstream **90-second**
+decompilation limit. MCP clients enforce their own tool-call timeouts, and
+setup's derived [client tool timeout](client-configuration.md) does not include
+this setting, so also raise the client timeout when selecting a longer
+deadline.
 
 Decoded manifest and method text have a **1 MiB** upstream byte budget and report
 truncation. Class-name pages use indexed slices of up to 4,096 names without changing the
@@ -319,6 +450,14 @@ export REA_JADX_MCP_JAR="$PWD/_reference/apk-integration/jadx-headless-mcp-0.7.1
 export REA_ANDROID_TEST_APK="$PWD/_reference/apk-integration/ApiDemos-debug.apk"
 npm run verify:android
 ```
+
+The main lane and Windows Java-selection checks validate the selected JDK and
+engine archive through `validateVerifierJadxConfiguration`. This shared verifier
+boundary supplies the production validator's resource owner and waits for
+retained cleanup before proceeding. Failed closes retain their exact owners for
+retry; prerequisite failures must not be mistaken for completed bridge tests.
+Recovery checks match the typed Java or archive failure and its applicable
+remediation.
 
 The lane also uses the selected full JDK's `jlink` to create a disposable JRE
 without the compiler module. It checks real Java startup failures, missing

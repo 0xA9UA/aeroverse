@@ -32,7 +32,6 @@ import { correlateConsoleObservations } from "../domain/consoleCorrelation.js";
 import { analysisInputErrorFromIssues } from "../domain/inputIssueProjection.js";
 import { consoleCorrelationEvidenceContext } from "./consoleObservationEvidence.js";
 import { createEvidence, type Evidence } from "../domain/evidence.js";
-import { jsonObjectSchema, jsonValueSchema } from "../domain/jsonValue.js";
 import { err, ok, type Result } from "../domain/result.js";
 import {
   CONSOLE_CAPTURE_PROVIDER_IDENTITY,
@@ -58,7 +57,9 @@ export class ConsoleObservationService {
     options?: ExecutionOptions,
   ): Promise<Result<Evidence, AnalysisError>> {
     if (options?.signal?.aborted === true)
-      return err(new AnalysisCancelledError(operation));
+      return err(
+        new AnalysisCancelledError(operation, { cause: options.signal.reason }),
+      );
     switch (operation) {
       case "inspect_console_network_capture":
         return this.inspectCapture(input, options);
@@ -106,7 +107,9 @@ export class ConsoleObservationService {
     const decoded = await this.capture.inspect(input, options);
     if (!decoded.ok) return decoded;
     if (options?.signal?.aborted === true)
-      return err(new AnalysisCancelledError(operation));
+      return err(
+        new AnalysisCancelledError(operation, { cause: options.signal.reason }),
+      );
     const parsedReport = consoleNetworkCaptureSchema.safeParse(decoded.value);
     if (!parsedReport.success)
       return err(
@@ -147,8 +150,8 @@ export class ConsoleObservationService {
         {
           predicateType: "rea.console-network-capture",
           operation,
-          parameters: jsonObjectSchema.parse(input),
-          result: jsonValueSchema.parse(report),
+          parameters: input,
+          result: report,
           confidence: "observed",
           authority: "historical-reference",
           limitations: report.limitations,
@@ -204,8 +207,8 @@ export class ConsoleObservationService {
       createEvidence(undefined, CONSOLE_DEBUGGER_PROVIDER_IDENTITY, {
         predicateType: "rea.console-debugger-observation",
         operation,
-        parameters: jsonObjectSchema.parse(input),
-        result: jsonValueSchema.parse(report),
+        parameters: input,
+        result: report,
         confidence: "observed",
         authority: "controlled-replay",
         subjectUnavailableReason:
@@ -234,7 +237,9 @@ export class ConsoleObservationService {
     const correlated = correlateConsoleObservations(input);
     if (!correlated.ok) return correlated;
     if (options?.signal?.aborted === true)
-      return err(new AnalysisCancelledError(operation));
+      return err(
+        new AnalysisCancelledError(operation, { cause: options.signal.reason }),
+      );
     const parsedReport = consoleCorrelationSchema.safeParse(correlated.value);
     if (!parsedReport.success)
       return err(
@@ -254,7 +259,7 @@ export class ConsoleObservationService {
         predicateType: "rea.console-observation-correlation",
         operation,
         parameters: context.parameters,
-        result: jsonValueSchema.parse(report),
+        result: report,
         confidence: "derived",
         authority: "analyst-inference",
         subjectUnavailableReason:

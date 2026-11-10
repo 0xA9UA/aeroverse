@@ -205,7 +205,7 @@ it("binds VLAN/IPv4/UDP payload coordinates to the measured pcap without releasi
     payload_state: "available",
   });
   expect(JSON.stringify(result.value)).not.toContain(payload.toString());
-  expect(await readFile(path)).toEqual(bytes);
+  expect((await readFile(path)).equals(bytes)).toBe(true);
 });
 
 it.each([true, false])(

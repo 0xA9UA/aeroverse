@@ -1,6 +1,6 @@
 <div align="center">
 
-[English](../../README.md) · [简体中文](README_zh.md) · [繁體中文](README_zh-TW.md) · [日本語](README_ja.md) · [한국어](README_ko.md) · [Türkçe](README_tr.md) · [Русский](README_ru.md) · [Tiếng Việt](README_vi.md) · [ไทย](README_th.md) · [Deutsch](README_de.md) · [Español](README_es.md) · [Français](README_fr.md) · [Українська](README_uk.md) · [Polski](README_pl.md) · [Português (Brasil)](README_pt-BR.md) · [العربية](README_ar.md) · [فارسی](README_fa.md) · [Bahasa Indonesia](README_id.md) · [Italiano](README_it.md) · **Ελληνικά**
+[English](../../README.md) · [简体中文](README_zh.md) · [繁體中文](README_zh-TW.md) · [日本語](README_ja.md) · [한국어](README_ko.md) · [Türkçe](README_tr.md) · [Русский](README_ru.md) · [Tiếng Việt](README_vi.md) · [ไทย](README_th.md) · [Deutsch](README_de.md) · [Español](README_es.md) · [Français](README_fr.md) · [Українська](README_uk.md) · [Polski](README_pl.md) · [Português (Brasil)](README_pt-BR.md) · [العربية](README_ar.md) · [فارسی](README_fa.md) · [Bahasa Indonesia](README_id.md) · [Italiano](README_it.md) · **Ελληνικά** · [മലയാളം](README_ml.md) · [Roman Urdu](README_ur-Latn.md) · [Română](README_ro.md)
 
 # REA: Reverse Engineer Anything
 
@@ -68,6 +68,8 @@
 
 ## Γρήγορη εκκίνηση
 
+Στο Linux, η εκκίνηση Ghidra, JADX και εργαλείων firmware και η στατική ανάλυση JavaScript/Electron απαιτούν `ps` συμβατό με procps στο `PATH` του REA για έλεγχο ιδιοκτησίας διεργασιών. Δες την προϋπόθεση Linux.
+
 ### Ρύθμιση του agent σου
 
 Αφού εγκαταστήσεις το Node.js και το npm, εκτέλεσε:
@@ -79,6 +81,8 @@ npx rea-agents setup
 Επίλεξε τους agents σου, έλεγξε τις προτεινόμενες αλλαγές και ενέκρινέ τες. Η διαδικασία προσθέτει τον MCP server του REA και τις αντίστοιχες οδηγίες εργασίας, κρατώντας αντίγραφα ασφαλείας των υφιστάμενων ρυθμίσεων. Στη συνέχεια, επανεκκίνησε τον agent σου.
 
 Υποστηρίζονται τα Claude Code, Codex, Cursor, Gemini CLI, Grok Build και [άλλοι agents](../installation.md#supported-agents). Για τη ρύθμιση των παρόχων ανάλυσης και τη μη αυτόματη καταχώριση MCP, δες τον οδηγό [εγκατάστασης και ρύθμισης](../installation.md).
+
+Το MCP χρησιμοποιεί συμπαγή σχήματα εισόδου από προεπιλογή. Για πλήρεις οδηγίες πεδίων και ένθετης επικύρωσης, όρισε `REA_MCP_INPUT_SCHEMA_PROFILE=full` στην καταχώριση MCP. Και τα δύο προφίλ διατηρούν όλα τα εργαλεία και την ίδια κανονική επικύρωση διακομιστή· δες τον οδηγό συμβολαίων MCP.
 
 ### Ζήτησε από τον agent σου
 
@@ -117,6 +121,8 @@ rea --help
 rea update
 ```
 
+Το `rea --update` είναι συνώνυμο του `rea update` με τις ίδιες καθολικές επιλογές εξόδου. Οι εντολές ενημέρωσης διατηρούν συνολικά έως 4 MiB stdout/stderr. Υπερμεγέθη μεταδεδομένα απορρίπτονται μετά την έξοδο· οι αναλυτικές εγκαταστάσεις κρατούν περιορισμένα διαγνωστικά. Η πρόοδος σέβεται την αντίθλιψη του τερματικού και περιμένει τις υποβληθείσες εγγραφές.
+
 Οι ενημερώσεις καθολικής εγκατάστασης με Bun απαιτούν Bun 1.2.17 ή νεότερο. Αν χρησιμοποιείς παλαιότερη έκδοση, αναβάθμισε το Bun χειροκίνητα πριν εκτελέσεις το `rea update`.
 
 Για να ανανεώσεις τις καταχωρίσεις των agents και το skill, εκτέλεσε την εντολή ρύθμισης που εμφανίζει η ενημέρωση.
@@ -141,7 +147,7 @@ npx rea-agents@latest setup
 
 ## Τι μπορείς να αναλύσεις
 
-Το REA απαιτεί Node.js 22.x (>=22.19), 24.x (>=24.11) ή 26+, καθώς και npm. Τα πρόσθετα εργαλεία και τα υποστηριζόμενα συστήματα εξαρτώνται από τον στόχο:
+Το REA απαιτεί Node.js 22.x (>=22.23.4), 24.x (>=24.22.1) ή 26+ (>=26.12.1), καθώς και npm. Τα πρόσθετα εργαλεία και τα υποστηριζόμενα συστήματα εξαρτώνται από τον στόχο:
 
 | Στόχος                                 | Τι επιστρέφει το REA                                                                                                        | Απαιτήσεις και οδηγός                                                                                                               |
 | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
@@ -149,14 +155,22 @@ npx rea-agents@latest setup
 | Δομή ELF χωρίς εκτέλεση                | Ενότητες, τμήματα, αρχικά σύμβολα/εγγραφές μετεγκατάστασης και ενδείξεις πιθανών μέτρων προστασίας από στατική ανάλυση      | pwntools που παρέχει ο χρήστης σε Linux x64· [διαγνωστικά δυαδικών αρχείων](../binary-diagnostics.md)                               |
 | Δυαδικά αρχεία Go                      | Ενσωματωμένη έκδοση μεταγλωττιστή, modules, αντικαταστάσεις και ρυθμίσεις μεταγλώττισης                                     | Ενσωματωμένη στατική εξέταση ELF/PE/thin Mach-O· δεν απαιτείται εγκατάσταση του Go                                                  |
 | Δυαδικά αρχεία Rust                    | Ενσωματωμένα ονόματα, εκδόσεις, πηγές και σχέσεις εξάρτησης των crates από το cargo-auditable                               | Ενσωματωμένη στατική εξέταση ELF/PE/thin Mach-O· [δυαδικά αρχεία Rust](../rust-binaries.md)                                         |
+| PE certificates                        | Authenticode WIN_CERTIFICATE entries and PKCS#7 signer/X.509 identity fields                                                | Built-in static PE inspection; [PE certificates](../pe-certificates.md)                                                             |
+| PE imports                             | Import and delay-load DLL names, ordinals, IAT RVAs and pefile import hash                                                  | Built-in static PE inspection; [PE imports](../pe-imports.md)                                                                       |
+| ELF notes                              | PT_NOTE/SHT_NOTE owners, types, GNU build-id and ABI-tag fields                                                             | Built-in static ELF inspection; [ELF notes](../elf-notes.md)                                                                        |
+| Apple IPS crashes                      | .ips metadata, threads, images, registers and crash classes                                                                 | Built-in static JSON inspection; [Apple IPS](../apple-ips.md)                                                                       |
+| Linux kernel modules                   | .modinfo keys, __versions CRCs, this_module presence, and signature trailer                                                 | Built-in static ELF inspection; [kernel modules](../kernel-modules.md)                                                              |
+| Erlang BEAM                            | IFF chunks, atoms, exports, and tables                                                                                      | Built-in static BEAM inspection; [Erlang BEAM](../erlang-beam.md)                                                                   |
 | Αρχείο WASM                            | Έλεγχο εγκυρότητας, ενότητες, ακριβείς μορφές εισαγωγών/εξαγωγών σε WAT και αποκωδικοποιημένο WAT                           | WABT 1.0.42 που παρέχει ο χρήστης· `inspect_wasm_artifact`                                                                          |
 | Bytecode EVM                           | Selectors επιλογής συνάρτησης, μετατοπίσεις σε bytes, εκτιμώμενα ορίσματα και δυνατότητα μεταβολής της κατάστασης           | Τοπική είσοδος σε ακατέργαστα bytes ή δεκαεξαδική μορφή σε Linux x64· [οδηγός EVM χωρίς εκτέλεση](../evm-bytecode.md)               |
 | Βάσεις δεδομένων SQLite                | Πίνακες, στήλες, ευρετήρια, όψεις, triggers και επιλεγμένες γραμμές κανονικών πινάκων                                       | Τοπικό στιγμιότυπο βάσης δεδομένων/WAL· Node.js 24.x >=24.15 ή 26+ με εγγενή όρια SQLite                                            |
 | Καταγεγραμμένες καταρρεύσεις στο Linux | Ακατέργαστες εγγραφές notes, καταχωρητές/σήματα κάθε καταγεγραμμένου νήματος και προαιρετικές πιθανές αντιστοιχίσεις μνήμης | pwntools που παρέχει ο χρήστης σε Linux x64· προαιρετικά GDB/pwndbg· [καταγεγραμμένες καταρρεύσεις](../recorded-crashes.md)         |
-| JavaScript / Electron                  | Modules, εισαγωγές, source maps, διαδρομές, IPC και σχέσεις με πρόσθετα κώδικα μηχανής                                      | Node.js και npm· [ανάλυση εφαρμογών](../javascript-application-workflows.md)                                                        |
+| Εγκαταστάσεις επιφάνειας εργασίας      | Υποψήφια περιβάλλοντα εκτέλεσης, αρχεία τεκμηρίωσης, στοιχεία και επόμενα βήματα                                            | Περιορισμένη επιθεώρηση καταλόγων και κεφαλίδων；[Εφαρμογές επιφάνειας εργασίας](../desktop-applications.md)                        |
+| JavaScript / Electron                  | Modules, εισαγωγές, source maps, διαδρομές, IPC και σχέσεις με πρόσθετα κώδικα μηχανής                                      | Node.js και npm· [ανάλυση εφαρμογών](../javascript-application-workflows.md); Linux: procps `ps`                                    |
 | Ιστότοποι                              | Δομή σελίδων, scripts, παρατηρήσεις δικτύου και ζητούμενα στιγμιότυπα οθόνης                                                | Πρόγραμμα περιήγησης της οικογένειας Chrome· [ανάλυση μέσω προγράμματος περιήγησης](../browser-observation.md)                      |
 | Αποθηκευμένες καταγραφές δικτύου       | Αιτήματα, αποκρίσεις, διαθέσιμα δεδομένα φορτίου και θέσεις στην πηγή                                                       | HAR ή SAZ του Fiddler Everywhere· mitmdump σε Linux για την εγγενή μορφή mitmproxy· [οδηγός καταγραφών](../web-network-captures.md) |
 | Assemblies .NET                        | Μεταδεδομένα, εντολές CIL, δηλωμένες εξαρτήσεις από κώδικα μηχανής και συγκρίσεις builds                                    | Καμία πρόσθετη απαίτηση (μόνο στατική ανάλυση)· [οδηγός διαχειριζόμενου κώδικα](../managed-code-analysis.md)                        |
+| PyInstaller                            | CArchive, PYZ, Python bytecode                                                                                              | Static inspection; [Python packaged applications](../python-packaged-applications.md)                                               |
 | APK Android                            | Δηλώσεις manifest, κλάσεις, απομεταγλωττισμένες μέθοδοι και αναφορές                                                        | JADX χωρίς γραφικό περιβάλλον και πλήρες JDK σε Linux/macOS/Windows x64· [οδηγός Android](../android-analysis.md)                   |
 | Συσκευές Android                       | Συσκευές, πακέτα, διεργασίες, logs, dumps, στιγμιότυπα οθόνης και μεταφορές APK/αρχείων                                     | adb που παρέχει ο χρήστης (εξομοιωτής ή φυσική συσκευή)· [οδηγός ADB](../adb-device-analysis.md)                                    |
 | Έργα JEB                               | Μονάδες έργου από τη μηχανή ανάλυσης, ψηφιακά αποτυπώματα αρχείων και ψευδοκώδικα τύπων/μεθόδων                             | Client JEB που έχει ξεκινήσει ο χρήστης και παρέχει MCP, επιλεγμένος μέσω REA_JEB_MCP_URL· [οδηγός JEB](../jeb-analysis.md)         |
@@ -168,6 +182,11 @@ npx rea-agents@latest setup
 | Καταγεγραμμένα λογικά σήματα           | Σχολιασμούς αποκωδικοποιητή, εύρη δειγμάτων και διαγνωστικά                                                                 | Linux: sigrok-cli 0.7.2 + prlimit· [καταγραφές σημάτων](../signal-recordings.md)                                                    |
 | Πακέτα και πόροι                       | Καταλόγους αρχείων, ψηφιακά αποτυπώματα, plists, δομή bundles της Apple και εξαγόμενους πόρους                              | [Οδηγός αρχείων και JavaScript](../javascript-artifact-reconstruction.md), [εφαρμογές Apple](../apple-application-analysis.md)      |
 | Συμπεριφορά διεργασιών                 | Έξοδο τερματικού, αλληλεπιδράσεις, παρατηρήσεις τερματισμού και συστήματος αρχείων, καθώς και συγκρίσεις εκτελέσεων         | Linux/macOS με εγγενές PTY· [καταγραφή διεργασιών](../process-capture.md)                                                           |
+| Αντικείμενα κώδικα GPU                 | Στόχοι CUDA/HIP, παράμετροι και πόροι επιλεγμένων kernels, διατηρημένο κείμενο PTX                                          | Ενσωματωμένη στατική επιθεώρηση ELF/PE/fatbin/CUBIN/PTX; [GPU](../gpu-code-objects.md)                                              |
+| Αρχεία μοντέλων                        | Μεταδεδομένα GGUF / safetensors, δηλώσεις tensors και παράγωγα σύνολα                                                       | Επιθεώρηση κεφαλίδων· προαιρετικό hash ολόκληρου αρχείου; [GGUF / safetensors](../model-artifacts.md)                               |
+| Μεταδεδομένα IL2CPP                    | Εικόνες assemblies Unity global-metadata.dat, ονόματα τύπων/μεθόδων και εύρη δεικτών                                        | Στατική αποκωδικοποίηση εκδόσεων 24, 27, 29, 31, 39· χωρίς Unity                                                                    |
+| Godot PCK                              | Απογραφή και εξαγωγή αρχείου, αρχικές κεφαλίδες/κατάλογοι και ταυτότητες επιλεγμένου περιεχομένου                           | Στατικές μορφές 2, 3, 4· χωρίς Godot                                                                                                |
+| Υπογραφές APK                          | Υπογράφοντες v1/v2/v3/v3.1, αποτυπώματα πιστοποιητικών, εναλλαγή κλειδιών και εσωτερική συνέπεια digests                    | Ενσωματωμένη στατική επιθεώρηση; `inspect_apk_signature`                                                                            |
 
 Για εξέταση δυαδικών αρχείων με κώδικα μηχανής χωρίς εκτέλεση, το REA υποστηρίζει
 επίσης GNU objdump και Rizin που παρέχει ο χρήστης. Δες τον
@@ -179,11 +198,16 @@ npx rea-agents@latest setup
 
 <a id="choosing-a-deep-analysis-provider"></a>
 
-Οι μορφές κώδικα μηχανής και τα υποστηριζόμενα συστήματα διαφέρουν ανά πάροχο ανάλυσης. Δες τη [ρύθμιση Hopper και Ghidra](../installation.md#hopper), τον [οδηγό IDA](../ida-provider.md) (που περιλαμβάνει προαιρετική γέφυρα MCP για κώδικα μηχανής) και την [πειραματική υποστήριξη Ghidra στα Windows](../windows-ghidra-p0.md). Το Ghidra υποστηρίζει επίσης [ανάλυση DOS 16 bit](../ghidra-dos.md). Για μεγάλα δυαδικά αρχεία, αύξησε το χρονικό όριο εκκίνησης του παρόχου με `REA_GHIDRA_STARTUP_TIMEOUT_MS` ή `REA_HOPPER_STARTUP_TIMEOUT_MS`. Για την επιλογή παρόχου, δες τον [οδηγό CLI](../cli.md#choose-a-provider). Έλεγξε τη [διαθεσιμότητα ανά έκδοση](../installation.md#released-package-and-main) για λειτουργίες που προστέθηκαν μετά την τελευταία έκδοση στο npm.
+Οι μορφές κώδικα μηχανής και τα υποστηριζόμενα συστήματα διαφέρουν ανά πάροχο ανάλυσης. Δες τη [ρύθμιση Hopper και Ghidra](../installation.md#hopper), τον [οδηγό IDA](../ida-provider.md) (που περιλαμβάνει προαιρετική γέφυρα MCP για κώδικα μηχανής), [Kuna](../kuna-provider.md) και την [πειραματική υποστήριξη Ghidra στα Windows](../windows-ghidra-p0.md). Το Ghidra υποστηρίζει επίσης [ανάλυση DOS 16 bit](../ghidra-dos.md). Για μεγάλα δυαδικά αρχεία, αύξησε το χρονικό όριο εκκίνησης του παρόχου με `REA_GHIDRA_STARTUP_TIMEOUT_MS` ή `REA_HOPPER_STARTUP_TIMEOUT_MS`. Για την επιλογή παρόχου, δες τον [οδηγό CLI](../cli.md#choose-a-provider). Έλεγξε τη [διαθεσιμότητα ανά έκδοση](../installation.md#released-package-and-main) για λειτουργίες που προστέθηκαν μετά την τελευταία έκδοση στο npm.
 
 ## Μελέτες περίπτωσης
 
-[![Εικονογραφήσεις των μελετών περίπτωσης για τη στερεοφωνική τοποθέτηση ήχου στο DX-Ball, τη γέφυρα προχείρου του Notion και τον δακτύλιο βλημάτων του TH04](../assets/rea-showcases.png)](https://rea.tools/showcase/)
+<a href="https://rea.tools/showcase/">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="../assets/rea-showcases-dark.svg" />
+    <img alt="Εικονογραφήσεις των μελετών περίπτωσης για τη στερεοφωνική τοποθέτηση ήχου στο DX-Ball, τη γέφυρα προχείρου του Notion και τον δακτύλιο βλημάτων του TH04" src="../assets/rea-showcases.svg" />
+  </picture>
+</a>
 
 ### DX-Ball: ανακατασκευή υπολογισμού στερεοφωνικής τοποθέτησης ήχου
 
@@ -286,7 +310,7 @@ npx rea-agents@latest setup
 
 ## Ιστορικό αστεριών
 
-🎉 **200.000 αστέρια στο GitHub — σας ευχαριστούμε!**
+🎉 **300.000 αστέρια στο GitHub — σας ευχαριστούμε!**
 
 Ευχαριστούμε όλους όσοι χρησιμοποιούν το REA, αναφέρουν σφάλματα, ζητούν νέες λειτουργίες, δοκιμάζουν builds και συνεισφέρουν διορθώσεις.
 

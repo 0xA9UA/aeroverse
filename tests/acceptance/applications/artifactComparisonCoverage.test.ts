@@ -14,7 +14,7 @@ import {
   parseEvidence,
   type Evidence,
 } from "../../../src/domain/evidence.js";
-import { jsonValueSchema } from "../../../src/domain/jsonValue.js";
+
 import { connectLocalToolsMcp } from "../../fixtures/localToolsMcp.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 import { cliTest, type TestCli } from "../../support/cli/cliFixture.js";
@@ -75,7 +75,7 @@ const assertCoverageControls = async ({
       {
         operation: "inventory_artifact",
         parameters: {},
-        result: jsonValueSchema.parse(result),
+        result: result,
         confidence: "derived",
         authority: "shipped-artifact",
       },
@@ -105,7 +105,6 @@ const assertCoverageControls = async ({
     derive({
       ...inventory,
       coverage: { scope: "root", status: "unknown" },
-      coverage_status: "partial",
       limitations: [],
     }),
   );
@@ -125,26 +124,14 @@ const assertCoverageControls = async ({
     limitations: expect.arrayContaining(["Artifact inventory scopes differ."]),
   });
 
-  const { coverage, coverage_status: _coverageStatus, ...legacy } = inventory;
-  expect(coverage).toBeDefined();
-  const retained = await compare(left, derive(legacy));
-  expect(retained.normalized_result).toMatchObject({
-    status: "unchanged",
-    summary: { unchanged: 1, unknown: 0 },
-  });
-  for (const limitation of [
-    "Child inventory is unavailable.",
-    "Missing child observations; 1 integrity contradiction(s) were recorded.",
-  ]) {
-    const unfamiliarLegacy = await compare(
-      left,
-      derive({ ...legacy, limitations: [limitation] }),
-    );
-    expect(unfamiliarLegacy.normalized_result).toMatchObject({
-      status: "unknown",
-      summary: { unchanged: 0, unknown: 1 },
-    });
-  }
+  const { coverage: _coverage, ...withoutCoverage } = inventory;
+  expect(() => artifactInventoryResultSchema.parse(withoutCoverage)).toThrow();
+  expect(() =>
+    artifactInventoryResultSchema.parse({
+      ...inventory,
+      coverage_status: "complete",
+    }),
+  ).toThrow();
 };
 
 cliTest(
@@ -187,7 +174,7 @@ cliTest(
       edge_count: 0,
     });
     expect(inventory.limitations).toEqual([
-      "Artifact has no child container entries.",
+      "Inventory covers root bytes only; child container entries were not examined.",
     ]);
     const equal = await compare(left, right);
     expect(equal.normalized_result).toMatchObject({
@@ -195,8 +182,8 @@ cliTest(
       summary: { unchanged: 1, unknown: 0 },
       changes: [],
       limitations: [
-        "Left: Artifact has no child container entries.",
-        "Right: Artifact has no child container entries.",
+        "Left: Inventory covers root bytes only; child container entries were not examined.",
+        "Right: Inventory covers root bytes only; child container entries were not examined.",
       ],
     });
     const behavior = await call("find_changed_behavior", {

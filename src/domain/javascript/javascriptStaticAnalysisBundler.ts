@@ -4,6 +4,7 @@ import { javascriptBootstrapAt } from "./javascriptBootstrap.js";
 import {
   resolveSemanticBindingState,
   type JavaScriptSemanticAnalysisState,
+  type JavaScriptBindingIndex,
 } from "./javascriptSemanticState.js";
 import { semanticFactoryLoaderMemberAt } from "./javascriptSemanticRequireOrigin.js";
 
@@ -256,9 +257,31 @@ const recoverBundlerModule = (
   if (key.startsWith("[computed@") || key.startsWith("[unknown@"))
     accumulator.unknownFindings += 1;
   const fingerprint = fingerprintJavaScriptAst(factory);
-  const exportsValue = collectJavaScriptExports(factory, bindings);
-  const requireName = factoryRequireName(factory);
-  const requireParameter = runtimeFunctionParameters(factory)[2];
+  const parameters = runtimeFunctionParameters(factory);
+  const esbuild = runtime.startsWith("esbuild-");
+  const identifierAt = (index: number): t.Identifier | undefined => {
+    const parameter = parameters[index];
+    return t.isIdentifier(parameter) ? parameter : undefined;
+  };
+  const roles = {
+    exports:
+      runtime === "esbuild-commonjs"
+        ? identifierAt(0)
+        : esbuild
+          ? undefined
+          : identifierAt(1),
+    module:
+      runtime === "esbuild-commonjs"
+        ? identifierAt(1)
+        : esbuild
+          ? undefined
+          : identifierAt(0),
+    loader: esbuild ? undefined : identifierAt(2),
+  };
+  const exports: string[] = [];
+  accumulator.pendingBundlerExports.push({ factory, roles, exports });
+  const requireName = esbuild ? null : factoryRequireName(factory);
+  const requireParameter = esbuild ? undefined : parameters[2];
   const requireBindingId = t.isIdentifier(requireParameter)
     ? (resolveSemanticBindingState(
         bindings,
@@ -290,7 +313,7 @@ const recoverBundlerModule = (
       source_sha256: sha256Text(sourceSlice(source, factory)),
       structural_fingerprint_sha256: fingerprint,
       structural_fingerprint_algorithm: JAVASCRIPT_AST_FINGERPRINT_ALGORITHM,
-      exports: exportsValue.values,
+      exports,
       location: range(factory),
     },
     asyncChunkKeys: asyncChunks.values,
@@ -427,4 +450,18 @@ const uniqueValues = (values: readonly string[], unknown = 0): StaticValues => {
     values: unique,
     unknown,
   };
+};
+
+/** Complete factory exports once the shared alias-aware write index is ready. */
+export const finishBundlerExports = (
+  accumulator: AnalysisAccumulator,
+  index: JavaScriptBindingIndex,
+): void => {
+  for (const pending of accumulator.pendingBundlerExports) {
+    const collected = collectJavaScriptExports(pending.factory, {
+      roles: pending.roles,
+      index,
+    });
+    for (const value of collected.values) pending.exports.push(value);
+  }
 };

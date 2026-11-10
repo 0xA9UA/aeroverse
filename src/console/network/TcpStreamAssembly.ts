@@ -2,12 +2,13 @@
 // Purpose: Reconstructs bounded selected TCP byte ranges with explicit gaps, overlap conflicts and generations.
 // Public interface: assembleTcpStreams() and packet/chunk provenance types.
 // Collaborators: Packet metadata, private payload views and console message contracts.
-// Invariants: Interfaces/generations stay distinct; incomplete FIN payloads and conflicting bytes cannot establish complete messages.
+// Invariants: Interfaces, VLANs and generations stay distinct; incomplete FIN payloads and conflicting bytes cannot establish complete messages.
 import { createHash } from "node:crypto";
 import { AnalysisResourceConstraintError } from "../../domain/analysisErrorCore.js";
 import type { ConsoleNetworkPacket } from "../../domain/consoleNetworkCapture.js";
 import {
   CONSOLE_MESSAGE_LIMITS,
+  consoleVlanIdentity,
   type ConsoleTcpStream,
 } from "../../domain/consoleNetworkMessages.js";
 
@@ -84,6 +85,7 @@ export const assembleTcpStreams = (
     const directionId = endpoints.join("->");
     const connectionKey = JSON.stringify([
       packet.interface_id,
+      consoleVlanIdentity(packet.vlan_tags),
       [...endpoints].sort(),
     ]);
     const syn = (packet.tcp.flags & 2) !== 0,

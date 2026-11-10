@@ -100,7 +100,9 @@ export class ConsoleDebuggerAdapter {
       );
     const input = parsed.data;
     if (options?.signal?.aborted)
-      return err(new AnalysisCancelledError(OPERATION));
+      return err(
+        new AnalysisCancelledError(OPERATION, { cause: options.signal.reason }),
+      );
     if (input.endpoint.transport === "unix" && !isAbsolute(input.endpoint.path))
       return invalid("Unix debugger socket path must be absolute.");
     if (

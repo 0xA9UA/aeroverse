@@ -1,3 +1,5 @@
+import { nativeAddressObservationSchema } from "../domain/native/nativeAddress.js";
+import { procedureInfoSchema } from "../domain/native/procedureInfo.js";
 import { z } from "zod";
 import {
   nativeFunctionAnnotationsInputSchema,
@@ -17,6 +19,7 @@ import {
   functionBodyEntryAgrees,
   functionInstructionWindowSchema,
   functionDossierSchema,
+  availableReferenceKindSchema,
   type FunctionDossier,
 } from "../domain/hopperValues.js";
 import {
@@ -36,7 +39,6 @@ import { analysisInputErrorFromIssues } from "../domain/inputIssueProjection.js"
 import {
   ghidraIdentifierSchema,
   ghidraInputAddressSchema,
-  ghidraCanonicalAddressSchema,
   ghidraFunctionClassificationSchema as classification,
   ghidraFunctionBodySchema as ghidraFunctionBody,
   ghidraProcedureIdentitySchema as procedureIdentity,
@@ -138,30 +140,14 @@ const localVariable = z
     provenance: z.literal("ghidra-function-database"),
   })
   .strict();
-const referenceKind = z
-  .object({
-    available: z.literal(true),
-    provenance: z.literal("ghidra-reference-manager"),
-    type: z.string().min(1),
-    flow: z.boolean(),
-    call: z.boolean(),
-    jump: z.boolean(),
-    data: z.boolean(),
-    read: z.boolean(),
-    write: z.boolean(),
-    indirect: z.boolean(),
-    computed: z.boolean(),
-    conditional: z.boolean(),
-    terminal: z.boolean(),
-    primary: z.boolean(),
-    operand_index: z.number().int(),
-    external: z.boolean(),
-  })
-  .strict();
+const referenceKind = availableReferenceKindSchema.safeExtend({
+  provenance: z.literal("ghidra-reference-manager"),
+  type: z.string().min(1),
+});
 const referenceEdge = z
   .object({
-    source_address: ghidraCanonicalAddressSchema,
-    target_address: ghidraCanonicalAddressSchema,
+    source_address: nativeAddressObservationSchema,
+    target_address: nativeAddressObservationSchema,
     source_procedure: procedureIdentity.nullable(),
     target_procedure: procedureIdentity.nullable(),
     kind: referenceKind,
@@ -175,19 +161,17 @@ const procedureReferences = z
     reference_kinds_available: z.boolean(),
     unresolved_calls: z.array(
       z.strictObject({
-        address: ghidraCanonicalAddressSchema,
+        address: nativeAddressObservationSchema,
         reason: z.string(),
       }),
     ),
   })
   .strict();
-const procedureInfo = z
-  .object({
+const procedureInfo = procedureInfoSchema
+  .safeExtend({
     name: z.string().min(1),
-    entrypoint: ghidraCanonicalAddressSchema,
-    basicblock_count: z.number().int().min(0),
-    length: z.number().int().min(0),
-    signature: z.string().nullable(),
+    entrypoint: nativeAddressObservationSchema,
+    length: z.int().min(0),
     locals: z.array(localVariable),
     classification,
     body: ghidraFunctionBody,
@@ -223,7 +207,7 @@ const ghidraNativeApiBoundary = nativeApiBoundarySchema.superRefine(
     ]);
     if (
       addresses.some(
-        (address) => !ghidraCanonicalAddressSchema.safeParse(address).success,
+        (address) => !nativeAddressObservationSchema.safeParse(address).success,
       )
     )
       context.addIssue({
@@ -249,7 +233,7 @@ const ghidraNativeValueFlow = nativeValueFlowSchema.superRefine(
     ]);
     if (
       addresses.some(
-        (address) => !ghidraCanonicalAddressSchema.safeParse(address).success,
+        (address) => !nativeAddressObservationSchema.safeParse(address).success,
       )
     )
       context.addIssue({
@@ -338,7 +322,7 @@ const ghidraFunctionDossier = functionDossierSchema
     ];
     if (
       addresses.some(
-        (address) => !ghidraCanonicalAddressSchema.safeParse(address).success,
+        (address) => !nativeAddressObservationSchema.safeParse(address).success,
       )
     )
       context.addIssue({
@@ -398,8 +382,8 @@ const resultSchemas = {
   }),
   analyze_function: ghidraFunctionDossier,
   procedure_assembly: z.string(),
-  procedure_callees: z.array(ghidraCanonicalAddressSchema),
-  procedure_callers: z.array(ghidraCanonicalAddressSchema),
+  procedure_callees: z.array(nativeAddressObservationSchema),
+  procedure_callers: z.array(nativeAddressObservationSchema),
   procedure_info: procedureInfo,
   procedure_pseudo_code: z.string().nullable(),
   read_function_instructions: ghidraFunctionInstructionWindow,
@@ -407,7 +391,7 @@ const resultSchemas = {
   inspect_native_data_type: nativeDataTypeSchema,
   resolve_native_call_targets: nativeCallTargetsSchema,
   procedure_references: procedureReferences,
-  xrefs: z.array(ghidraCanonicalAddressSchema),
+  xrefs: z.array(nativeAddressObservationSchema),
 } satisfies Readonly<Record<GhidraFunctionOperation, z.ZodType>>;
 
 const functionBoundaryObservationOperations: ReadonlySet<GhidraFunctionOperation> =
@@ -418,24 +402,28 @@ const functionBoundaryObservationOperations: ReadonlySet<GhidraFunctionOperation
     "procedure_callers",
     "procedure_info",
     "procedure_pseudo_code",
+    "procedure_references",
     "read_function_instructions",
   ]);
 
 const functionObservationEnvelope = z.strictObject({
   value: z.unknown(),
   limitations: z.array(z.string()),
+  cache_policy: z.literal("live").exactOptional(),
   relationship_coverage: relationshipCoverageSchema.exactOptional(),
   selection: z
     .strictObject({
-      file_offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
-      mapped_address: ghidraCanonicalAddressSchema,
-      procedure_address: ghidraCanonicalAddressSchema,
+      file_offset: z.int().min(0).max(Number.MAX_SAFE_INTEGER),
+      mapped_address: nativeAddressObservationSchema,
+      procedure_address: nativeAddressObservationSchema,
     })
     .exactOptional(),
 });
 
 export interface ParsedGhidraFunctionResult {
   readonly value: JsonValue;
+  readonly rawResult?: JsonValue;
+  readonly cachePolicy?: "live";
   readonly limitations: readonly string[];
   readonly locations?: readonly EvidenceLocation[];
   readonly relationshipCoverage?: RelationshipCoverage;
@@ -449,6 +437,7 @@ export const parseGhidraFunctionResult = (
   let observation: {
     readonly value: unknown;
     readonly limitations: readonly string[];
+    readonly cache_policy?: "live";
     readonly relationship_coverage?: RelationshipCoverage;
     readonly selection?: z.infer<
       typeof functionObservationEnvelope
@@ -458,6 +447,8 @@ export const parseGhidraFunctionResult = (
     const envelope = functionObservationEnvelope.safeParse(value);
     if (
       !envelope.success ||
+      (operation !== "analyze_function" &&
+        envelope.data.cache_policy !== undefined) ||
       (operation !== "analyze_function" &&
         operation !== "procedure_callers" &&
         operation !== "procedure_callees" &&
@@ -481,12 +472,17 @@ export const parseGhidraFunctionResult = (
     ? ok({
         value: jsonValueSchema.parse(parsed.data),
         limitations: observation.limitations,
+        ...(observation.cache_policy === undefined
+          ? {}
+          : { cachePolicy: observation.cache_policy }),
         ...(observation.relationship_coverage === undefined
           ? {}
           : { relationshipCoverage: observation.relationship_coverage }),
         ...(observation.selection === undefined
           ? {}
           : {
+              // Generic locations retain coordinates but not their mapping roles.
+              rawResult: value,
               locations: [
                 {
                   kind: "file-offset" as const,

@@ -6,6 +6,34 @@ for the reviewed setup transaction and [client IDs](installation.md#supported-ag
 The versioned verification notes below describe their stated runs; live service
 acceptance is verified only where explicitly recorded.
 
+## Runtime settings and client deadlines
+
+`update_analysis_settings` changes curated defaults inside the running REA
+server. It does not edit the client registration, extend the client's tool-call
+deadline, or recompute timeout values previously derived by `rea setup`. When
+raising a REA startup or operation deadline, separately ensure the client allows
+enough time for the full request. Use `inspect_analysis_settings` for the running
+server's defaults; `rea doctor` checks launch configuration and cannot observe
+another process's runtime overrides. See the
+[settings design](design/limits-and-recovery.md) for ownership and lifetime.
+
+## Client tool names and discovery
+
+REA advertises canonical names such as `binary_session`. The MCP host decides
+how to expose them to its model: a name such as `mcp__rea__binary_session` is a
+client convention, not a prefix REA can enforce. Use the active client's tool
+listing and server association to find the operation. A valid registration or
+installed skill does not prove that those tools reached the model. Doctor reports
+live-server identity as unknown; query `binary_session` through the active client
+to observe the running server's identity.
+
+If a client or fork exposes several servers under the same prefix, a wildcard
+for that prefix does not isolate REA permissions. Inspect that client's actual
+tool names and approval rules before selecting a permission scope. REA setup
+does not repair a client's naming behavior or infer permission drift from an
+unfamiliar prefix. The unavailable fork reported in
+[#5512](https://github.com/morluto/rea/issues/5512) has not been reverified.
+
 ## Fiddler Everywhere alongside REA
 
 Connect Fiddler Everywhere's MCP server separately for HTTP traffic debugging,
@@ -13,6 +41,12 @@ preserving your REA client entry. See the
 [setup instructions and public skills](web-network-captures.md#fiddler-everywhere-mcp-and-public-skills).
 
 ## GitHub Copilot CLI
+
+Setup preserves an existing `tools` selection in the REA registration, including
+an empty list. New registrations default to `["*"]`. A restricted selection is
+aligned configuration; doctor does not widen it to expose every REA tool. See
+[Copilot's MCP configuration](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-mcp-servers)
+for tool-selection settings.
 
 For GitHub Copilot CLI 1.0.95, `gpt-4.1` model metadata can block ordinary
 chat with REA's full input-schema profile before sending a model request
@@ -52,10 +86,16 @@ in the file the installed app reads:
   `%APPDATA%` file it still reads; with neither file, setup creates the
   private copy.
 - If `%LOCALAPPDATA%\Packages` holds a `Claude_<publisher ID>` package from
-  another publisher, or cannot be read, REA cannot establish which file Claude
+  another publisher, an `AnthropicPBC.Claude_<publisher ID>` package, or cannot
+  be read, REA cannot establish which file Claude
   Desktop reads. Setup, doctor and uninstall report that instead of falling
   back to `%APPDATA%`. Doctor then reports `claude_desktop` as invalid, and
   uninstall stops before removing anything for any client.
+  The reported `AnthropicPBC.Claude_fnn82j28hfe8t` build can use the `Claude-3p`
+  deployment directory. REA recognizes that package as an unresolved location;
+  it does not assume that it reads the legacy AppData file or automatically
+  register in `Claude-3p`. See [#4432](https://github.com/morluto/rea/issues/4432)
+  for the reported build and manual registration evidence.
 
 Quit Claude Desktop fully before approving setup; closing its window is not
 enough. A running Claude Desktop can rewrite its configuration from memory and
@@ -67,12 +107,17 @@ to rerun it.
 A process that the MSIX app started, such as a terminal in Claude Desktop's
 Code tab, sees the package's private files at their `%APPDATA%` paths even
 though it reports no package identity. Setup compares one of those files at
-both paths. When it finds that redirected view, the app is running, so setup
-and uninstall refuse to change Claude Desktop's configuration; rerun them from
-a terminal that Claude Desktop did not start. If the package has no private
-file to compare, setup and uninstall cannot rule that out and also refuse; open
-Claude Desktop once if it has never run, quit it fully, then rerun. Doctor
-reads the same file from either kind of process.
+both paths: first one from the package's private `Claude` folder, and when
+that folder has none (some installations keep writing the real
+`%APPDATA%\Claude`), one from the package's other private roaming folders,
+which the package redirects in the same way. When it finds that redirected
+view, the app is running, so setup and uninstall refuse to change Claude
+Desktop's configuration; rerun them from a terminal that Claude Desktop did not
+start. If the package keeps no private roaming file at all, setup and
+uninstall cannot rule that out and also refuse. With Claude Desktop fully
+quit, add REA's entry by hand to the file setup names, which is the one the
+app reads, or remove it from both the private copy and the `%APPDATA%` file.
+Doctor reads the same file from either kind of process.
 
 The same process also writes everything under `%APPDATA%` and
 `%LOCALAPPDATA%` into the package's private storage, where other apps never
@@ -140,8 +185,46 @@ profiles](mcp-contracts.md#output-schemas).
 Setup registers `rea` in `~/.kimi-code/mcp.json`, or
 `$KIMI_CODE_HOME/mcp.json` when set, while preserving unrelated settings and
 creating a `.rea.backup` before updating an existing file. Kimi Code infers
-stdio from the `command` entry, so setup does not add a `type` field. The
-registration includes `startupTimeoutMs = 30000` and `toolTimeoutMs = 120000`.
+stdio from the `command` entry, so setup does not add a `type` field. New
+registrations include `startupTimeoutMs = 30000` and a `toolTimeoutMs` derived
+from REA's known provider allowance plus 120 seconds of operation
+headroom. The default is 450000 ms, covering the default 330-second Ghidra
+startup; an explicit Ghidra startup timeout of 2700000 ms produces a 2820000 ms
+tool timeout. The startup allowance follows an explicitly selected Ghidra or
+Hopper provider, and otherwise uses the larger known Ghidra/Hopper deadline.
+An explicit `REA_JEB_MCP_TIMEOUT_MS` deadline, shared by catalog discovery and
+each tools/call, also contributes to that maximum. An explicit `REA_GHIDRA_DECOMPILE_TIMEOUT_SECONDS` is added to the Ghidra startup allowance, because a single-decompile call can import the target and then decompile up to that limit; setup forwards it into the registration. For `ida` or `auto` selection, a valid IDA registration's parsed
+`timeoutMs` also contributes to that maximum; its default is 300000 ms.
+The derived value is a single-decompile estimate, not a deadline for an
+unbounded batch. For example, startup 330 seconds plus two 600-second
+decompiles and 120 seconds of headroom needs an estimated 1650 seconds,
+before any additional listing or output work. Select the client tool deadline
+for the intended workload, split `batch_decompile`, use `decompile_all`
+limit/resume, or reduce `trace_native_values` `max_functions`. The trace can
+decompile several functions serially; its depth and graph budgets do not
+make the single-decompile allowance a whole-traversal deadline. Existing positive caller deadlines are preserved.
+Setup forwards these explicitly selected REA deadlines and the input schema
+profile into the registration; unrelated process values are omitted. An
+explicit `REA_JADX_OPERATION_TIMEOUT_MS` is forwarded with the JADX
+registration but does not contribute to the derived tool timeout; raise
+`toolTimeoutMs` to cover a longer selected JADX deadline.
+This headroom is a practical default, not a guarantee for every analysis
+duration. Setup preserves positive timeout values already in the `rea` entry.
+You can edit `startupTimeoutMs` and `toolTimeoutMs` there; doctor keeps positive
+caller-selected values aligned and reports a non-blocking advisory when a tool
+timeout is shorter than the known provider allowance.
+Setup selects the compact input-schema advertisement for new or refreshed Kimi
+registrations unless their stored configuration or setup environment explicitly
+selects `REA_MCP_INPUT_SCHEMA_PROFILE=full` or `compact`. This keeps REA's
+canonical tool validation unchanged while avoiding a Moonshot Kimi Code 2.2.0
+failure observed with the full catalog: its request was rejected because a
+single tool schema exceeded the provider's size limit. The limit is
+provider-specific and not an MCP protocol limit. `rea doctor --client kimi`
+reports an older registration with no explicit profile as stale. To restore the
+compact profile, run `rea setup --client kimi` or add
+`REA_MCP_INPUT_SCHEMA_PROFILE=compact` to the registration's `env`, then restart
+Kimi Code. An explicit `full` profile remains respected and can still exceed
+Moonshot's limit.
 Kimi Code also discovers personal skills in `~/.agents/skills` and project-local
 `.agents/skills`, so no separate skill root is required; setup still installs
 and verifies the matching skill files through the normal shared-skill flow.
@@ -201,21 +284,128 @@ and the selected `trustedFolders.json` (including
 `GEMINI_CLI_TRUSTED_FOLDERS_PATH`). Settings in an untrusted workspace do not
 participate. A workspace or system `mcpServers.rea` replaces the entire user
 entry; setup stops if the winning definition conflicts with its planned entry.
+Setup checks user policy against the file snapshot it is inspecting or about to
+update, including confirmed absence; an earlier discovery snapshot does not veto
+a repaired user policy. Independent system and workspace sources are still checked.
 Review those files manually: setup never edits administrator/workspace settings
 or grants workspace trust. Trust supplied only by a running IDE is outside this
 standalone CLI check.
 
+A model API's `400 INVALID_ARGUMENT` alone does not identify a rejected schema,
+tool-count limit or skill defect. Preserve the response's parameter path and
+diagnostic, the actual running REA version, Gemini CLI version and selected
+model. For schema rejection, review the [input presentation profiles](mcp-contracts.md#compact-input-schema-profile)
+and reconnect after changing REA's registration environment. Compact is the
+current default; an explicitly stored `full` choice is preserved. The generic
+error in [#4620](https://github.com/morluto/rea/issues/4620) does not establish
+which constraint failed, and local schema checks do not prove live API acceptance.
+
 ## Codex and Devin
 
-Codex treats an unset or empty `CODEX_HOME` as `~/.codex`. Devin honors
-`XDG_CONFIG_HOME` for its `devin/mcp_config.json` on non-Windows systems.
+REA manages its launcher and selected provider settings in the client
+registration. Codex's server and per-tool approval policies are user choices.
+Setup patches REA's connection fields in the selected file and retains other
+server settings, including `default_tools_approval_mode`, nested
+`[mcp_servers.rea.tools.<name>]` tables, tool allow/deny lists, and unrecognized
+client settings. Doctor accepts Codex's per-tool policy tables. Known malformed
+policy values block setup before it writes the configuration or a backup, and
+the diagnostic identifies the setting to repair. See the
+[Codex configuration reference](https://developers.openai.com/codex/config-reference/)
+for the supported policy values.
+
+When direct launcher paths prove the same executable or Node entrypoint,
+setup retains the existing caller-selected spelling. An otherwise aligned
+registration therefore needs no rewrite or recovery backup merely because
+REA was invoked through another symlink. Setup also retains that spelling when
+another field, such as an invalid timeout, needs repair. Unresolved identity
+does not prove equivalence.
+
+| Settings                                    | Setup ownership                                                                         |
+| ------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Launcher, transport and activation          | Refreshes the REA stdio connection and enables it.                                      |
+| Explicit server environment                 | Preserves configured overrides and merges selected provider settings.                   |
+| Codex timeouts                              | Retains positive values; repairs missing or invalid values to recommended REA defaults. |
+| Codex approval policies and tool selections | Retains caller choices; refuses known malformed values.                                 |
+| Unrelated or future server settings         | Retains their parsed values.                                                            |
+
+Dry-run applies the same policy validation and writes no files. A successful
+refresh keeps an exact recovery snapshot of the original configuration;
+repeating setup with the same settings performs no write. Uninstall removes
+the owned REA entry, including its policy, while retaining other servers and
+the recovery snapshot. A green registration check establishes known
+configuration alignment; it does not prove that a particular client or fork
+successfully exposes every REA tool.
+
+Codex treats an unset or empty `CODEX_HOME` as `~/.codex`. Its MCP server
+registration supports `startup_timeout_sec` for connection initialization and
+`tool_timeout_sec` for each tool call. New REA registrations use a 30-second
+startup timeout and a tool timeout derived from the known provider
+allowance plus 120 seconds of operation headroom. This yields 450 seconds for
+the default Ghidra allowance; an explicit Ghidra startup timeout of 2700
+seconds yields 2820 seconds. That 30-second Codex figure is client guidance.
+REA's own phase budgets are `REA_MCP_INITIALIZE_BUDGET_MS` (default 15000),
+`REA_MCP_TOOLS_LIST_BUDGET_MS` (default 5000),
+`REA_MCP_FIRST_CATALOG_BUDGET_MS` (default 20000), and
+`REA_MCP_DOCTOR_DEADLINE_MS` (default 30000). Each is a positive decimal
+integer of milliseconds from 1 to 2147483647. Unset keeps the default.
+Invalid values fail configuration and name the setting. Setup copies a
+caller-selected value into the registration, and a change is read from the
+environment that starts REA, so it needs a restart. Doctor and packaged
+startup probes name the effective milliseconds, whether they came from the
+default or the setting, the default, the floor, and the maximum. REA does
+not enforce Codex's 30 seconds as the doctor deadline. The 120000 ms
+tool-operation headroom and the 64 KiB doctor stderr cap stay fixed. Setup preserves positive caller-selected timeout
+values in the REA entry, and doctor reports a non-blocking advisory when a tool
+timeout is shorter than the known provider allowance. An explicitly selected
+JEB request budget also contributes to the allowance, and an explicit
+`REA_GHIDRA_DECOMPILE_TIMEOUT_SECONDS` is added to the Ghidra startup
+allowance. A configured IDA
+registration's parsed `timeoutMs` contributes for `ida` or `auto` selection.
+An explicit `REA_JADX_OPERATION_TIMEOUT_MS` is forwarded with the JADX
+registration but does not contribute; raise `tool_timeout_sec` to cover a
+longer selected JADX deadline.
+These values are client-side deadlines, so increase them in `~/.codex/config.toml` if a
+workload needs more time. Devin honors `XDG_CONFIG_HOME` for its
+`devin/mcp_config.json` on non-Windows systems.
+
+### Codex with Moonshot or Kimi models
+
+An older REA input containing acyclic local references was rejected by a
+Responses-compatible Kimi gateway as “infinite recursion”; expanding those
+references succeeded. A separate full-profile input failed the provider's
+schema-size limit. These are distinct reported failures, not proof that the
+canonical schema is recursive. Current REA inputs are already self-contained;
+see [schema advertisement](mcp-contracts.md#schema-advertisement).
+
+For this failure, inspect the active MCP launch command and refresh the REA
+installation that command actually runs. A configured package selector or the
+installed skill version alone does not identify a cached or still-running
+server. Follow [installation and update guidance](installation.md#diagnose-update-and-remove).
+Then merge this setting into the REA entry in `$CODEX_HOME/config.toml`
+(`~/.codex/config.toml` by default), preserving its launcher and other settings:
+
+```toml
+[mcp_servers.rea.env]
+REA_MCP_INPUT_SCHEMA_PROFILE = "compact"
+```
+
+If that table already exists, add or update the key there. Restart/reconnect
+Codex so REA reads the new environment. Compact is now REA's default, but an
+explicit `full` override remains effective until changed. It preserves the
+tool inventory and canonical server validation while reducing advertised input
+detail. The probes in [#5160](https://github.com/morluto/rea/issues/5160) covered
+individual tools through one gateway, not the entire current catalog or a
+model-driven analysis workflow.
 
 ## OMP
 
 For OMP, setup writes a `type: "stdio"` entry to the user-level
-`~/.omp/agent/mcp.json`. It follows `PI_CONFIG_DIR` and
-`PI_CODING_AGENT_DIR` (relative to the setup working directory), and the profile selected by `OMP_PROFILE` or
-`PI_PROFILE` (`~/.omp/profiles/<name>/agent/mcp.json`). Setup also removes
+`~/.omp/agent/mcp.json`. A relative `PI_CONFIG_DIR` selects a configuration root
+under the home directory. For the default profile, `PI_CODING_AGENT_DIR`
+overrides the agent directory; a relative value uses the setup working
+directory. A named profile selected by `OMP_PROFILE` or `PI_PROFILE` instead
+uses `<configuration-root>/profiles/<name>/agent/mcp.json` and ignores
+`PI_CODING_AGENT_DIR`. Setup also removes
 `rea` from that file's `disabledServers` list, which would otherwise hide the
 registration. Doctor treats an `enabled: false` entry as active when
 `enabledServers` lists `rea`, as OMP does, unless `disabledServers` also lists
@@ -234,7 +424,11 @@ Setup, doctor and uninstall follow the root's `active_profile` selection, as
 plain Hermes CLI commands do. An explicit `HERMES_HOME` pointing to
 `profiles/<name>` selects that named profile directly. An invalid, missing or
 deleted sticky profile is reported instead of writing into the default home;
-repair the profile or run `hermes profile use default` before retrying.
+it also remains an unresolved skill selection, so setup cannot report a
+successful empty installation. Overrides nested beneath the native Hermes home
+use that native home's sticky selection and profile root together, matching
+[Hermes's root rules](https://github.com/NousResearch/hermes-agent/blob/748c79a1c6873124d84071cdabb4062a75913e1f/hermes_constants.py#L83).
+Repair the profile or run `hermes profile use default` before retrying.
 REA follows `HERMES_HOME` whitespace trimming, environment-variable expansion,
 and home expansion before resolving that profile. Setup previews the resolved
 configuration and skill destinations; doctor and uninstall use those same paths.
@@ -309,6 +503,28 @@ server with `enable: false` on its entry; doctor reports such a registration
 as stale, and rerunning setup removes the flag to repair it. Native configuration
 uses strict JSON; setup refuses comments, trailing commas and a BOM rather than
 writing a registration ZCode cannot load.
+
+## FreeBuff
+
+For FreeBuff, the proposed integration writes `mcpServers.rea` into the user-scope
+`~/.agents/mcp.json` shared-agent file. Entries carry `command`, `args`, and
+`env`; stdio is the default transport. The proposed personal skill location is
+`~/.agents/skills`, so setup installs its skill copy there. Because the same
+file doubles as ZCode's user-scope fallback (see above), a `freebuff`
+registration is also in the file ZCode uses until ZCode defines its own native server.
+Setup and doctor detect FreeBuff from its own profile directory
+(`~/.config/freebuff-desktop`), not from the shared `.agents` folder that
+REA's skill installs create for every client.
+
+The configuration write and personal skill locations are proposed integration
+boundaries. FreeBuff MCP loading and skill discovery have not been verified
+with an installed native FreeBuff client/version; filesystem tests cover REA's
+editing, discovery, and ownership behavior only. Automatic applicability
+requires the FreeBuff profile directory even when the shared MCP file exists.
+
+FreeBuff is main-only and is not in a published release yet; npm 6.7.0 is the
+latest. `rea setup --client freebuff` against `@latest` reports an unsupported
+client until a release containing it is published.
 
 ## DeepSeek Harness
 
@@ -395,3 +611,46 @@ npx -y rea-agents@<version> mcp
 
 Do not put credentials in that command or its arguments. `rea doctor --client grok_bot`
 reports this manual step. `rea uninstall` does not remove the account connector.
+
+## Skill selection and maintenance
+
+OpenCode's selected configuration layers determine the registration dialect.
+If any loaded layer uses native `mcp.servers`, setup writes a native REA entry
+in the selected upper file even when that file is absent or has no MCP table.
+Legacy activation is normalized before layer merging, so an explicit enable
+can override an inherited disable. Lower files and other server entries remain
+unchanged; a legacy server named `servers` that conflicts with the native table
+requires manual repair before setup can write.
+
+When Hermes aliases refer to an anchored REA entry, refreshing or removing REA
+retains the aliases' original resolved values. Setup does not redirect another
+server's alias to REA's new launcher or policy.
+
+With no client selected, the interactive skill choice targets the shared
+`~/.agents/skills` copy. Selecting a client targets its personal destination
+when supported. Use `rea setup --skill-client shared --skill` for the shared
+copy, or `--skill-client claude_code --skill` for that client's copy. Setup
+resolves the final selection before deciding which files need installation.
+Doctor retains each selected stale or missing path and names the matching
+repair command; a current copy elsewhere does not establish freshness.
+
+Unresolved profile or directory selections remain diagnostics and never become
+write targets. Update maintenance considers only known enabled, owned REA
+registrations and owned skills. If identity or a selected skill root is
+unresolved, it reports maintenance as unavailable with the known scope and
+remaining diagnostics. An empty writable scope alone does not prove current.
+
+When configuration publication fails, setup retains the affected path, operation
+and available filesystem code in the client result. Owner/group and mode
+preservation failures identify that operation rather than implying that the
+configuration bytes or parent directory are unwritable. Setup preserves the
+original and reports its recovery backup; review local ownership and group
+membership before retrying.
+
+For an installed POSIX CLI, setup prefers an executable absolute `rea` alias
+from its selected `PATH` when filesystem identity proves that it names the
+running REA entrypoint. This keeps package-manager aliases intact instead of
+persisting an internal versioned script path. Unresolved aliases and wrappers
+that are different files do not establish that proof; setup retains its selected
+entrypoint. A manager-specific upgrade remains subject to that manager's alias
+policy.

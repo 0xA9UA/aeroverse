@@ -43,12 +43,22 @@ export const PROCESS_COMPARISON_DIMENSIONS = [
   "filesystem",
   "process",
 ] as const;
+export type ProcessComparisonDimension =
+  (typeof PROCESS_COMPARISON_DIMENSIONS)[number];
+
+/** Caller-selected comparison policy; the clock is not persisted as policy. */
+export interface ProcessCaptureComparisonOptions {
+  readonly maxCaptureAgeMs?: number;
+  readonly now?: () => number;
+  readonly traceSpecification?: ProcessTraceSpecification;
+}
 
 /** Derive the overall comparison status from every process dimension. */
 export const deriveProcessComparisonStatus = (
   dimensions: readonly ComparisonStatus[],
 ): ComparisonStatus => {
   if (dimensions.includes("truncated")) return "truncated";
+  if (dimensions.includes("contradiction")) return "contradiction";
   if (
     dimensions.some((status) =>
       ["changed", "added", "removed"].includes(status),
@@ -72,16 +82,10 @@ export const processCaptureComparisonSchema = z
       z.object({ status: z.literal("unknown"), reason: z.string() }),
       z.object({
         status: z.literal("found"),
-        dimension: z.enum([
-          "terminal",
-          "interaction",
-          "exit",
-          "filesystem",
-          "process",
-        ]),
-        index: z.number().int().nonnegative(),
-        left_at_ms: z.number().int().nonnegative().nullable(),
-        right_at_ms: z.number().int().nonnegative().nullable(),
+        dimension: z.enum(PROCESS_COMPARISON_DIMENSIONS),
+        index: z.int().nonnegative(),
+        left_at_ms: z.int().nonnegative().nullable(),
+        right_at_ms: z.int().nonnegative().nullable(),
         left: jsonValueSchema.nullable(),
         right: jsonValueSchema.nullable(),
       }),
@@ -330,7 +334,8 @@ const applyTraceVerdict = (
   const sources = new Set(specification.events.map(({ source }) => source));
   const covered = dimensionsForTraceSources(sources);
   // A different verdict names the failing events and observations; attribute
-  // it only to their dimensions so equal observations keep their exact status.
+  // it only to their dimensions; unrelated comparisons keep their own status,
+  // including unknown coverage and independently observed additions/removals.
   const diagnosticSources = new Set<ProcessObservationSource>([
     ...specification.events
       .filter(({ id }) => trace.diagnostic?.event_ids.includes(id) === true)
@@ -350,8 +355,7 @@ const applyTraceVerdict = (
     if (!covered.has(dimension)) return exact;
     if (trace.verdict === "nonconforming") return exact;
     if (trace.verdict === "different")
-      return traceShowsDifference &&
-        (exact !== "unchanged" || attributed.has(dimension))
+      return traceShowsDifference && attributed.has(dimension)
         ? "changed"
         : exact;
     if (
@@ -379,7 +383,7 @@ const applyTraceVerdict = (
 
 type ComparisonDimensions = Pick<
   ProcessCaptureComparison,
-  "terminal" | "interaction" | "exit" | "filesystem" | "process"
+  ProcessComparisonDimension
 >;
 
 const compareDimensions = (
@@ -446,11 +450,7 @@ const compareDimensions = (
 export const compareProcessCaptures = (
   left: ProcessCapture,
   right: ProcessCapture,
-  options: {
-    readonly maxCaptureAgeMs?: number;
-    readonly now?: () => number;
-    readonly traceSpecification?: ProcessTraceSpecification;
-  } = {},
+  options: ProcessCaptureComparisonOptions = {},
 ): ProcessCaptureComparison => {
   assertComparable(left, right, options);
   const sameNormalization = sameJsonValue(
@@ -503,15 +503,21 @@ export const compareProcessCaptures = (
         ? ({ status: "none" } as const)
         : observedFirstDivergence.status === "found"
           ? observedFirstDivergence
-          : !sameNormalization ||
-              left.residual_unknowns.length > 0 ||
-              right.residual_unknowns.length > 0
+          : trace?.verdict === "different" || trace?.verdict === "unknown"
             ? ({
                 status: "unknown",
                 reason:
-                  "Residual unknowns prevent proving that no divergence occurred.",
+                  "The declared trace differs or has insufficient journal evidence; per-source observations cannot locate its first cross-source divergence.",
               } as const)
-            : observedFirstDivergence;
+            : !sameNormalization ||
+                left.residual_unknowns.length > 0 ||
+                right.residual_unknowns.length > 0
+              ? ({
+                  status: "unknown",
+                  reason:
+                    "Residual unknowns prevent proving that no divergence occurred.",
+                } as const)
+              : observedFirstDivergence;
   const observedStatus = deriveProcessComparisonStatus(
     PROCESS_COMPARISON_DIMENSIONS.map((dimension) => dimensions[dimension]),
   );

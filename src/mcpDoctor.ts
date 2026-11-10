@@ -1,23 +1,38 @@
-import { Client } from "@modelcontextprotocol/client";
+import { Client, SdkError, SdkErrorCode } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
-import { Formatter, Help, z } from "incur";
+import { Help, z } from "incur";
 import { performance } from "node:perf_hooks";
 import { resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 
 import { createCatalogIdentity } from "./catalogIdentity.js";
+import { jsonLinesErrorRecord } from "./cli/jsonLines.js";
+import {
+  CLI_OUTPUT_FORMATS,
+  type CliOutputFormat,
+  missingCliOutputValueMessage,
+  renderCliDocument,
+} from "./cliOutput.js";
 import {
   compactPresentationForMcpInputSchemaProfile,
   parseMcpInputSchemaProfile,
 } from "./config/mcpInputSchemaProfile.js";
+import { parseMcpOutputSchemaProfile } from "./config/mcpOutputSchemaProfile.js";
 import { PROMPT_CONTRACTS } from "./contracts/promptContracts.js";
 import { TOOL_CONTRACTS } from "./contracts/toolContracts.js";
 import { err, ok } from "./domain/result.js";
 import { PRODUCT_IDENTITY } from "./identity.js";
-import { MCP_STARTUP_POLICY } from "./mcpStartupPolicy.js";
+import {
+  parseMcpStartupBudgets,
+  type McpPhaseBudget,
+} from "./config/mcpStartupBudgets.js";
+import {
+  MCP_STARTUP_POLICY,
+  mcpDoctorDeadlineRecovery,
+} from "./mcpStartupPolicy.js";
 
-const OUTPUT_FORMATS = ["toon", "json", "yaml", "md", "jsonl"] as const;
-type OutputFormat = (typeof OUTPUT_FORMATS)[number];
+const OUTPUT_FORMATS = CLI_OUTPUT_FORMATS;
+type OutputFormat = CliOutputFormat;
 
 /**
  * Canonical `rea mcp doctor` options. This schema is the single source of
@@ -79,10 +94,36 @@ interface McpDoctorCheck {
 
 /** Diagnose the actual production stdio adapter with one startup-bounded SDK session. */
 export const runProductionMcpDoctor = async (options: McpDoctorOptions) => {
+  const parsedBudgets = parseMcpStartupBudgets(options.environment);
+  if (!parsedBudgets.ok)
+    return {
+      healthy: false as const,
+      adapter: "production-stdio" as const,
+      server: null,
+      inventory: null,
+      identity: null,
+      request_flow: {
+        tool: "binary_session" as const,
+        ok: false as const,
+      },
+      checks: parsedBudgets.error.settings.map((issue) => ({
+        name: issue.setting,
+        ok: false as const,
+        detail: issue.constraint,
+      })),
+      diagnostics: {
+        stderr: "",
+        stderr_bytes: 0,
+        stderr_truncated: false,
+      },
+    };
   const catalog = catalogIdentityForEnvironment(options.environment);
-  const deadline =
-    performance.now() +
-    (options.deadlineMs ?? MCP_STARTUP_POLICY.doctorDeadlineMs);
+  const budget = appliedDoctorBudget(
+    parsedBudgets.value.doctor,
+    options.deadlineMs,
+  );
+  const budgetMs = budget.milliseconds;
+  const deadline = performance.now() + budgetMs;
   const controller = new AbortController();
   const timer = setTimeout(
     () => controller.abort(new Error("Production MCP doctor deadline expired")),
@@ -110,6 +151,7 @@ export const runProductionMcpDoctor = async (options: McpDoctorOptions) => {
       deadline,
       controller.signal,
       catalog,
+      budget,
     );
   } catch (cause: unknown) {
     result = {
@@ -123,7 +165,7 @@ export const runProductionMcpDoctor = async (options: McpDoctorOptions) => {
         {
           name: "transport",
           ok: false,
-          detail: errorMessage(cause),
+          detail: doctorTransportDetail(cause, budget, controller.signal),
         },
       ],
     };
@@ -196,6 +238,7 @@ const inspectProductionMcpSession = async (
   deadline: number,
   signal: AbortSignal,
   catalog: ReturnType<typeof createCatalogIdentity>,
+  budget: McpPhaseBudget,
 ) => {
   const request = requestOptions(deadline, signal);
   const [tools, prompts] = await Promise.all([
@@ -212,7 +255,10 @@ const inspectProductionMcpSession = async (
       },
     )
     .then(ok, (cause: unknown) =>
-      err({ kind: "request-flow" as const, detail: errorMessage(cause) }),
+      err({
+        kind: "request-flow" as const,
+        detail: doctorTransportDetail(cause, budget, signal),
+      }),
     );
   const inventory = {
     tools: compareInventory(
@@ -285,7 +331,11 @@ const inspectProductionMcpSession = async (
  */
 export const runProductionMcpDoctorCli = async (
   arguments_: readonly string[],
-  input: { readonly dispatcherPath: string; readonly packageRoot: string },
+  input: {
+    readonly dispatcherPath: string;
+    readonly packageRoot: string;
+    readonly stdoutIsTerminal: boolean;
+  },
 ): Promise<{ readonly output: string; readonly exitCode: number }> => {
   const started = performance.now();
   const parsed = parseOutputArguments(arguments_);
@@ -293,10 +343,13 @@ export const runProductionMcpDoctorCli = async (
     if (parsed.help)
       return { output: `${renderMcpDoctorHelp()}\n`, exitCode: 0 };
     return {
-      output: `${Formatter.format(
-        { code: "VALIDATION_ERROR", message: parsed.message },
+      output: renderCliDocument(
+        parsed.format === "jsonl"
+          ? jsonLinesErrorRecord({ code: parsed.code, message: parsed.message })
+          : { code: parsed.code, message: parsed.message },
         parsed.format,
-      )}\n`,
+        input.stdoutIsTerminal,
+      ),
       exitCode: 1,
     };
   }
@@ -317,7 +370,13 @@ export const runProductionMcpDoctorCli = async (
       }
     : result;
   return {
-    output: `${Formatter.format(outputValue, parsed.format)}\n`,
+    output: renderCliDocument(
+      parsed.format === "jsonl" && !result.healthy
+        ? jsonLinesErrorRecord(outputValue)
+        : outputValue,
+      parsed.format,
+      input.stdoutIsTerminal,
+    ),
     exitCode: result.healthy ? 0 : 1,
   };
 };
@@ -397,6 +456,7 @@ type McpDoctorArguments =
       readonly ok: false;
       readonly help: false;
       readonly format: OutputFormat;
+      readonly code: "MISSING_OUTPUT_VALUE" | "VALIDATION_ERROR";
       readonly message: string;
     };
 
@@ -422,12 +482,21 @@ const parseOutputArguments = (
     if (argument === "--format" || inline !== undefined) {
       const candidate = inline ?? arguments_[index + 1];
       if (inline === undefined) index += 1;
+      if (candidate === undefined || candidate === "")
+        return {
+          ok: false,
+          help: false,
+          format,
+          code: "MISSING_OUTPUT_VALUE",
+          message: missingCliOutputValueMessage("--format"),
+        };
       if (!isOutputFormat(candidate))
         return {
           ok: false,
           help: false,
           format,
-          message: `Invalid output format: ${candidate ?? "missing"}`,
+          code: "VALIDATION_ERROR",
+          message: `Invalid output format: ${candidate}`,
         };
       format = candidate;
       continue;
@@ -441,6 +510,7 @@ const parseOutputArguments = (
       ok: false,
       help: false,
       format,
+      code: "VALIDATION_ERROR",
       message: `Unknown mcp doctor option: ${argument ?? "missing"}`,
     };
   }
@@ -492,13 +562,17 @@ const targetFreeEnvironment = (
 const catalogIdentityForEnvironment = (
   environment: Readonly<Record<string, string | undefined>>,
 ): ReturnType<typeof createCatalogIdentity> => {
-  const parsed = parseMcpInputSchemaProfile(
+  const inputProfile = parseMcpInputSchemaProfile(
     environment.REA_MCP_INPUT_SCHEMA_PROFILE,
+  );
+  const outputProfile = parseMcpOutputSchemaProfile(
+    environment.REA_MCP_OUTPUT_SCHEMA_PROFILE,
   );
   return createCatalogIdentity(
     compactPresentationForMcpInputSchemaProfile(
-      parsed.ok ? parsed.value : undefined,
+      inputProfile.ok ? inputProfile.value : undefined,
     ),
+    outputProfile.ok ? (outputProfile.value ?? "full") : "full",
   );
 };
 
@@ -536,3 +610,40 @@ const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
 
 const errorMessage = (cause: unknown): string =>
   cause instanceof Error ? cause.message : String(cause);
+
+/**
+ * Name the applied doctor deadline when an owned abort or SDK request timeout
+ * fires. Remote failure text is not a deadline. Codex's 30 second startup
+ * figure stays client guidance and is not this deadline.
+ */
+const doctorTransportDetail = (
+  cause: unknown,
+  budget: McpPhaseBudget,
+  signal: AbortSignal,
+): string => {
+  const message = errorMessage(cause);
+  const timedOut =
+    (signal.aborted && cause === signal.reason) ||
+    (cause instanceof SdkError && cause.code === SdkErrorCode.RequestTimeout);
+  return timedOut ? `${message} ${mcpDoctorDeadlineRecovery(budget)}` : message;
+};
+
+/**
+ * `deadlineMs` is a caller-selected applied deadline, used by tests. Omitted
+ * means the budget resolved from `REA_MCP_DOCTOR_DEADLINE_MS`.
+ */
+const appliedDoctorBudget = (
+  resolved: McpPhaseBudget,
+  deadlineMs: number | undefined,
+): McpPhaseBudget =>
+  deadlineMs === undefined
+    ? resolved
+    : {
+        ...resolved,
+        milliseconds: deadlineMs,
+        source:
+          deadlineMs === resolved.defaultMilliseconds &&
+          resolved.source === "default"
+            ? "default"
+            : "setting",
+      };

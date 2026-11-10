@@ -22,6 +22,8 @@ Capture with an existing emulator capture facility, Wireshark/dumpcap, or a dedi
 
 `include_payload: true` additionally returns packet payload hex. The default preserves digests and decoded metadata, including HTTP targets and DNS names. Original file identity, packet ordinals and offsets remain available. Message sources identify the exact packet byte ranges used. TCP assembly tracks direction, connection generation, gaps and conflicting retransmissions; selecting packet ordinals can leave a stream incomplete.
 
+Packet `vlan_tags` records Ethernet tags from outer to inner, including each tag's protocol, VLAN ID, priority and drop eligibility. TCP assembly keeps capture interfaces and ordered protocol/VLAN-ID stacks separate, including stacked QinQ tags; priority and drop-eligibility changes alone do not split a stream. An empty list records observed untagged Ethernet, while `null` means VLAN metadata is unavailable. Older reports may omit the field and remain readable; omission preserves unknown VLAN identity. Message and stream source validation rejects joins across different VLAN identities or between known and omitted VLAN metadata.
+
 Plaintext HTTP/1.0 and HTTP/1.1 decoding exposes requests, responses, framing and body digests. UDP DNS decoding exposes questions and resource records. Unsupported framing, IP fragmentation, truncation, unknown link types and opaque encryption remain explicit. No TLS keys are inferred, and inspection does not replay packets or contact recorded endpoints. Use the existing HAR/mitmproxy inspection tool when the source is an application-level capture in those formats.
 
 ## Observe an emulator or hardware stub

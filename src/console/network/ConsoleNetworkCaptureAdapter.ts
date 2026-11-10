@@ -286,6 +286,7 @@ const projectPacket = (
   captured_length: record.bytes.length,
   original_length: record.originalLength,
   interface_id: record.interface.id,
+  vlan_tags: decoded.vlan_tags,
   link_type: record.interface.linkType,
   snap_length: record.interface.snapLength,
   network: decoded.network,

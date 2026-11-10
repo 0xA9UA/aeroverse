@@ -200,7 +200,7 @@ const testAnalysis = (
         });
       case "list_names":
         return execution(operation, [
-          { address: "0x1000", name: "-[BuildViewController buildTapped:]" },
+          { address: "0x1000", value: "-[BuildViewController buildTapped:]" },
         ]);
       case "procedure_callees":
         return execution(
@@ -257,6 +257,56 @@ describe("native UI action trace", () => {
       }),
     );
   });
+  it("carries source-owned reference limitations into trace output without changing coverage", async () => {
+    const limitation = "SEH handler targets may be outside the function body.";
+    const run = async (limitations: readonly string[]) => {
+      const result = await new EnhancedTools(
+        testAnalysis({
+          procedure_address: () => execution("procedure_address", "0x1000"),
+          procedure_references: () =>
+            ok(
+              createAnalysisExecution(
+                {
+                  reference_kinds_available: false,
+                  references: [],
+                  unresolved_calls: [],
+                },
+                { id: "ghidra", name: "Ghidra", version: "fixture" },
+                { limitations },
+              ),
+            ),
+          procedure_callees: (parameters) =>
+            execution(
+              "procedure_callees",
+              parameters.procedure === "0x1000" ? ["0x2000"] : [],
+            ),
+        }),
+      ).execute("trace_native_ui_action", { action: "0x1000" });
+      if (!result.ok) throw result.error;
+      return nativeInvestigationTraceSchema.parse(result.value);
+    };
+
+    const withSourceLimitation = await run([limitation]);
+    const withoutSourceLimitation = await run([]);
+
+    expect(withSourceLimitation.limitations).toContain(
+      `Ghidra (ghidra fixture) procedure_references: ${limitation}`,
+    );
+    expect(
+      withSourceLimitation.limitations.filter((entry) =>
+        entry.endsWith(`procedure_references: ${limitation}`),
+      ),
+    ).toHaveLength(1);
+    expect(withSourceLimitation.coverage).toEqual(
+      withoutSourceLimitation.coverage,
+    );
+    expect(withSourceLimitation.coverage).toContainEqual(
+      expect.objectContaining({
+        facet: "static_native_calls",
+        status: "partial",
+      }),
+    );
+  });
   it("accepts an explicit native seed without an authored UI connection", async () => {
     const result = await new EnhancedTools(
       testAnalysis({
@@ -305,6 +355,74 @@ describe("native UI action trace", () => {
         status: "unsupported",
       }),
     );
+  });
+});
+
+describe("native dispatch candidate identity", () => {
+  it.each([
+    ["0x1000", "0x3000"],
+    ["ram:0x1000", "rom:0x1000"],
+  ])(
+    "keeps same-selector implementation alternatives unresolved: %j and %j",
+    async (left, right) => {
+      for (const addresses of [
+        [left, right],
+        [right, left],
+      ]) {
+        const result = await new EnhancedTools(
+          testAnalysis({
+            list_names: () =>
+              execution(
+                "list_names",
+                addresses.map((address) => ({
+                  ...methodInventoryEntry,
+                  address,
+                })),
+              ),
+          }),
+        ).execute("trace_native_ui_action", { action: "buildTapped:" });
+        if (!result.ok) throw result.error;
+        const trace = nativeInvestigationTraceSchema.parse(result.value);
+        const dispatch = trace.unresolved.find(
+          ({ relation }) => relation === "objc_dispatch",
+        );
+        expect(dispatch).toMatchObject({
+          to: null,
+          resolution: "unresolved",
+          reason: "selector_has_multiple_candidate_implementations",
+        });
+        expect(
+          dispatch?.evidence.map(({ location }) => location.address),
+        ).toEqual(expect.arrayContaining(addresses));
+      }
+    },
+  );
+
+  it("uses one canonical function node for equivalent coordinate spellings", async () => {
+    const addresses = ["0x1000", "0X001000"];
+    for (const ordered of [addresses, [...addresses].reverse()]) {
+      const result = await new EnhancedTools(
+        testAnalysis({
+          list_names: () =>
+            execution(
+              "list_names",
+              ordered.map((address) => ({ ...methodInventoryEntry, address })),
+            ),
+        }),
+      ).execute("trace_native_ui_action", { action: "buildTapped:" });
+      if (!result.ok) throw result.error;
+      const trace = nativeInvestigationTraceSchema.parse(result.value);
+      const dispatch = trace.edges.find(
+        ({ relation }) => relation === "objc_dispatch",
+      );
+      expect(dispatch).toMatchObject({
+        to: "native:function:0x1000",
+        resolution: "inferred",
+      });
+      expect(
+        dispatch?.evidence.map(({ location }) => location.address),
+      ).toEqual(expect.arrayContaining(addresses));
+    }
   });
 });
 
@@ -417,10 +535,6 @@ describe("native dispatch inventory", () => {
   it.each([
     { label: "plain value", entry: { address: "0x1000", value: methodName } },
     { label: "value with symbol facts", entry: methodInventoryEntry },
-    {
-      label: "legacy name with symbol facts",
-      entry: { address: "0x1000", name: methodName, symbol: methodSymbol },
-    },
   ])(
     "binds $label inventory to the target without overstating dispatch coverage",
     async ({ entry }) => {
@@ -465,6 +579,10 @@ describe("native dispatch inventory", () => {
   );
 
   it.each([
+    {
+      label: "legacy name with symbol facts",
+      entry: { address: "0x1000", name: methodName, symbol: methodSymbol },
+    },
     {
       label: "malformed symbol flag",
       entry: {
@@ -718,11 +836,11 @@ describe("native UI trace boundaries", () => {
   it("matches handlers after the dispatch inventory's former default limit", async () => {
     const names = Array.from({ length: 5_000 }, (_, index) => ({
       address: `0x${(index + 1).toString(16)}`,
-      name: `unrelated_symbol_${index}`,
+      value: `unrelated_symbol_${index}`,
     }));
     names.push({
       address: "0x2000",
-      name: "-[BuildViewController buildTapped:]",
+      value: "-[BuildViewController buildTapped:]",
     });
     const result = await new EnhancedTools(
       testAnalysis({ list_names: () => execution("list_names", names) }),
