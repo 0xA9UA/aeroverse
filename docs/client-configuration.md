@@ -176,8 +176,10 @@ against DeepSeek's API is unverified.
 
 For a client whose stdio reader rejects the complete catalog frame, add
 `"REA_MCP_OUTPUT_SCHEMA_PROFILE": "off"` to REA's `env` object and restart the
-client. This omits only advertised output schemas; REA still validates complete
-structured results against its canonical contracts. See [MCP output schema
+client. Keep `"REA_MCP_INPUT_SCHEMA_PROFILE": "compact"` (the default) as well;
+an explicit `full` input profile can exceed a one-megabyte frame even with
+output schemas off. REA still validates complete structured results against
+its canonical contracts. See [MCP output schema
 profiles](mcp-contracts.md#output-schemas).
 
 ## Kimi Code

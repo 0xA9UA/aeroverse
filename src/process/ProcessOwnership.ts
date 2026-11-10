@@ -198,10 +198,33 @@ export interface ProcessOwnershipHost {
   signalGroup(processGroupId: number, signal: NodeJS.Signals): void;
 }
 
+/** Bounded native parser diagnostics, without argument or environment contents. */
+export type ProcessRunTokenReadDiagnostic = {
+  readonly stage:
+    | "header"
+    | "argc"
+    | "executable_path"
+    | "pointer_size"
+    | "path_padding"
+    | "argument"
+    | "trailing_terminator"
+    | "trailing_entry"
+    | "unexpected_error";
+  readonly buffer_bytes: number;
+  readonly argument_count: number | null;
+  readonly offset: number;
+  readonly pointer_size: number;
+  readonly code_signing_flags: number | null;
+};
+
 /** Whether one live process exposed its ownership token to the host. */
 export type ProcessRunTokenObservation =
   | { readonly state: "readable"; readonly runId: string | undefined }
-  | { readonly state: "unavailable"; readonly reason: string };
+  | {
+      readonly state: "unavailable";
+      readonly reason: string;
+      readonly diagnostic?: ProcessRunTokenReadDiagnostic;
+    };
 
 /** Narrow Windows P0 seam for bounded process-tree termination. */
 export interface WindowsProcessTreeHost {
@@ -216,6 +239,7 @@ interface ProcessOwnershipValidationFailure {
     | "run-token-mismatch"
     | "process-identity-unavailable";
   readonly diagnostic?: string;
+  readonly tokenReadDiagnostic?: ProcessRunTokenReadDiagnostic;
 }
 
 /**
@@ -1317,6 +1341,9 @@ const processOwnershipFailures = async (
           pid: fact.process.pid,
           reason: "environment-unreadable",
           diagnostic: fact.token.reason,
+          ...(fact.token.diagnostic === undefined
+            ? {}
+            : { tokenReadDiagnostic: fact.token.diagnostic }),
         });
       } else if (fact.token.runId !== runId) {
         failures.push({ pid: fact.process.pid, reason: "run-token-mismatch" });
@@ -1347,6 +1374,9 @@ const processRunTokenFailures = async (
       pid: member.pid,
       reason: "environment-unreadable",
       diagnostic: observation.reason,
+      ...(observation.diagnostic === undefined
+        ? {}
+        : { tokenReadDiagnostic: observation.diagnostic }),
     });
   }
   return recheckOwnershipFailures(failures, host);
@@ -1409,6 +1439,7 @@ interface TokenOwnedProcessScan {
 interface UnreadableTokenCandidate {
   readonly process: ProcessTableEntry;
   readonly diagnostic: string;
+  readonly tokenReadDiagnostic?: ProcessRunTokenReadDiagnostic;
 }
 
 const TOKEN_READ_RETRY_ATTEMPTS = 3;
@@ -1483,7 +1514,14 @@ const scanTokenOwnedProcesses = async (
   )) {
     if (observation.state === "readable") {
       if (observation.runId === runId) recordOwned(process);
-    } else unreadable.push({ process, diagnostic: observation.reason });
+    } else
+      unreadable.push({
+        process,
+        diagnostic: observation.reason,
+        ...(observation.diagnostic === undefined
+          ? {}
+          : { tokenReadDiagnostic: observation.diagnostic }),
+      });
   }
   const remaining = await settleUnreadableTokenCandidates(
     unreadable,
@@ -1539,6 +1577,9 @@ const scanTokenOwnedProcesses = async (
       pid: candidate.process.pid,
       reason: "environment-unreadable",
       diagnostic: candidate.diagnostic,
+      ...(candidate.tokenReadDiagnostic === undefined
+        ? {}
+        : { tokenReadDiagnostic: candidate.tokenReadDiagnostic }),
     });
   }
   for (const candidate of withheld) {
@@ -1731,6 +1772,9 @@ const scanWithOwnershipEvidence = async (
         pid: fact.process.pid,
         reason: "environment-unreadable",
         diagnostic: fact.token.reason,
+        ...(fact.token.diagnostic === undefined
+          ? {}
+          : { tokenReadDiagnostic: fact.token.diagnostic }),
       });
   }
 
@@ -1826,6 +1870,9 @@ const settleUnreadableTokenCandidates = async (
       stillUnreadable.push({
         process,
         diagnostic: observation.reason,
+        ...(observation.diagnostic === undefined
+          ? {}
+          : { tokenReadDiagnostic: observation.diagnostic }),
       });
     }
     remaining = stillUnreadable;

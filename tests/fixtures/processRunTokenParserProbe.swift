@@ -23,6 +23,20 @@ func fixture(
   return bytes
 }
 
+func malformedObservation(_ bytes: [UInt8], pointerSize: Int = 8) throws -> Any {
+  do {
+    _ = try parseProcessEnvironment(in: bytes, pointerSize: pointerSize)
+    fatalError("Expected a malformed fixture")
+  } catch let failure as RunTokenReadError {
+    let observation = processRunTokenObservation(
+      pid: 1,
+      parse: .failure(failure),
+      codeSigningFlags: { 0x0400_0800 }
+    )
+    return try JSONSerialization.jsonObject(with: JSONEncoder().encode(observation))
+  }
+}
+
 @main
 struct ProcessRunTokenParserProbe {
   static func main() throws {
@@ -189,8 +203,21 @@ struct ProcessRunTokenParserProbe {
       parse: .failure(.environmentUnavailable),
       codeSigningFlags: { 0 }
     )
+    let negativeArgc = withUnsafeBytes(of: Int32(-1).littleEndian, Array.init)
+    let privateFixture = fixture(
+      arguments: ["private-argument"],
+      environment: ["PRIVATE_VALUE=private-environment"]
+    )
+    var invalidPadding = privateFixture
+    invalidPadding[24] = 1
 
     let result: [String: Any] = [
+      "malformedProcargs": [
+        try malformedObservation(truncatedArgv),
+        try malformedObservation(negativeArgc),
+        try malformedObservation(privateFixture, pointerSize: -1),
+        try malformedObservation(invalidPadding),
+      ],
       "argvDecoyIgnored": argvDecoy.runId == nil && argvDecoy.environmentEntryCount == 1,
       "realTokenRead": realToken.runId == "owned-token",
       "readableEnvironmentWithoutToken": [

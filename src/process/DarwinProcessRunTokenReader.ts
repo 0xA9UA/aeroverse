@@ -26,9 +26,42 @@ import {
 } from "./ExecFileOutput.js";
 import type {
   ProcessIdentityObservation,
+  ProcessRunTokenReadDiagnostic,
   ProcessRunTokenObservation,
   ProcessTableEntry,
 } from "./ProcessOwnership.js";
+
+const tokenReadDiagnosticSchema: z.ZodType<ProcessRunTokenReadDiagnostic> =
+  z.strictObject({
+    stage: z.enum([
+      "header",
+      "argc",
+      "executable_path",
+      "pointer_size",
+      "path_padding",
+      "argument",
+      "trailing_terminator",
+      "trailing_entry",
+      "unexpected_error",
+    ]),
+    buffer_bytes: z.int().nonnegative(),
+    argument_count: z
+      .int()
+      .min(-2147483648)
+      .max(2147483647)
+      .nullable()
+      .optional()
+      .transform((value) => value ?? null),
+    offset: z.int().nonnegative(),
+    pointer_size: z.int(),
+    code_signing_flags: z
+      .int()
+      .min(0)
+      .max(0xffffffff)
+      .nullable()
+      .optional()
+      .transform((value) => value ?? null),
+  });
 
 const responseSchema = z.strictObject({
   results: z.array(
@@ -44,6 +77,7 @@ const responseSchema = z.strictObject({
         state: z.literal("unavailable"),
         run_id: z.union([z.string(), z.null()]).optional(),
         reason: z.string().min(1),
+        diagnostic: tokenReadDiagnosticSchema.optional(),
       }),
     ]),
   ),
@@ -690,6 +724,9 @@ export const createDarwinProcessRunTokenReader = (
               state: "unavailable",
               reason:
                 result.reason ?? "process token observation is unavailable",
+              ...(result.diagnostic === undefined
+                ? {}
+                : { diagnostic: result.diagnostic }),
             },
       );
     }

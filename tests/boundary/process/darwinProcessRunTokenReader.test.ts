@@ -1189,6 +1189,60 @@ it.skipIf(!onDarwin)(
         timeout: 10_000,
       });
       expect(JSON.parse(stdout)).toEqual({
+        malformedProcargs: [
+          {
+            pid: 1,
+            state: "unavailable",
+            reason: "malformed_procargs",
+            diagnostic: {
+              stage: "argument",
+              buffer_bytes: 82,
+              argument_count: 2,
+              offset: 48,
+              pointer_size: 8,
+              code_signing_flags: 0x04000800,
+            },
+          },
+          {
+            pid: 1,
+            state: "unavailable",
+            reason: "malformed_procargs",
+            diagnostic: {
+              stage: "argc",
+              buffer_bytes: 4,
+              argument_count: -1,
+              offset: 4,
+              pointer_size: 8,
+              code_signing_flags: 0x04000800,
+            },
+          },
+          {
+            pid: 1,
+            state: "unavailable",
+            reason: "malformed_procargs",
+            diagnostic: {
+              stage: "pointer_size",
+              buffer_bytes: 93,
+              argument_count: 1,
+              offset: 24,
+              pointer_size: -1,
+              code_signing_flags: 0x04000800,
+            },
+          },
+          {
+            pid: 1,
+            state: "unavailable",
+            reason: "malformed_procargs",
+            diagnostic: {
+              stage: "path_padding",
+              buffer_bytes: 93,
+              argument_count: 1,
+              offset: 24,
+              pointer_size: 8,
+              code_signing_flags: 0x04000800,
+            },
+          },
+        ],
         argvDecoyIgnored: true,
         readableEnvironmentWithoutToken: {
           runId: null,

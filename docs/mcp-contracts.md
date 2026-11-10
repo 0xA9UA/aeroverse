@@ -1324,7 +1324,11 @@ Some stdio hosts reject a complete `tools/list` frame before they load any
 tools. The opt-in `REA_MCP_OUTPUT_SCHEMA_PROFILE=off` setting omits `outputSchema`
 from the advertised catalog for hosts with a small frame limit (the measured
 pi-web-ui failure and catalog breakdown are in [#2512](https://github.com/morluto/rea/issues/2512)).
-The default `full` profile is unchanged. With `off`, REA validates successful
+Keep `REA_MCP_INPUT_SCHEMA_PROFILE=compact` (the default) for these hosts;
+the explicit `full` input profile can exceed a one-megabyte catalog frame even
+with output schemas off. The catalog-size regression checks every tool with
+compact inputs and output schemas off against that frame limit.
+Output schemas remain `full` by default. With `off`, REA validates successful
 structured results against the same named canonical tool contract before
 delivery; it still returns complete `structuredContent` and text results.
 Only client-side schema discovery and validation are omitted, so hosts using
