@@ -192,7 +192,9 @@ it("returns a directly usable partial analysis reference for an oversized timeou
     );
   const nextRoot = await createTestTempDirectory("rea-js-timeout-recovery-");
   await writeFile(join(nextRoot, "main.js"), "export const recovered = 9;\n");
-  const { client, transport, diagnostics } = createResourceClient();
+  // Retained timeout Evidence and schema work need parent result headroom for
+  // recovery independent of GC timing. The isolated worker remains at 128 MiB.
+  const { client, transport, diagnostics } = createResourceClient(768);
   try {
     await client.connect(transport);
     const response = await client.callTool(
@@ -306,7 +308,7 @@ const verifyRecovery = async (
   await client.ping();
 };
 
-const createResourceClient = () => {
+const createResourceClient = (parentHeapMb = 512) => {
   const client = new Client({ name: "javascript-resources", version: "1" });
   const transport = new StdioClientTransport({
     command: process.execPath,
@@ -314,7 +316,7 @@ const createResourceClient = () => {
     cwd: process.cwd(),
     env: {
       PATH: process.env.PATH ?? "",
-      NODE_OPTIONS: "--max-old-space-size=512 --max-semi-space-size=8",
+      NODE_OPTIONS: `--max-old-space-size=${String(parentHeapMb)} --max-semi-space-size=8`,
     },
     stderr: "pipe",
   });
